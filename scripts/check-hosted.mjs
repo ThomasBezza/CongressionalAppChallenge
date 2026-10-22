@@ -55,7 +55,7 @@ export async function checkHosted(origin, key, report = () => {}) {
     assert.equal((await request('/healthz')).status, 200, 'health check');
     stage = 'checking the public page';
     const html = await fetch(base, { redirect: 'error', signal: AbortSignal.timeout(10_000) }).then(r => r.text());
-    assert.ok(!html.includes(key), 'host key must not appear in public HTML');
+    if (html.includes(key)) throw new CheckFailure('The host key appears in public HTML. Treat it as exposed and rotate it before continuing.');
     stage = 'checking the public creation block';
     assert.equal((await request('/api/rooms', null, {})).status, 403, 'public room creation must be blocked');
     stage = 'creating a room with the host key';

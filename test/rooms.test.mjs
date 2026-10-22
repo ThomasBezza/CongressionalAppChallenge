@@ -350,14 +350,19 @@ test('repeatable deployment check exercises protected creation, live synchroniza
   assert.equal(app.rooms.rooms.size, 0, 'synthetic rooms are removed');
 });
 
-test('deployment check CLI identifies wrong keys and malformed responses without printing secrets', async t => {
+test('deployment check CLI identifies wrong keys, malformed responses and public key exposure without printing secrets', async t => {
   const suppliedKey = 'B'.repeat(43) + '='; // Synthetic; never a deployed key.
   const app = createApp({ creationSecret: 'A'.repeat(43) + '=' });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const malformed = createServer((req, res) => { res.end(`not JSON: ${suppliedKey}`); });
   await new Promise(resolve => malformed.listen(0, '127.0.0.1', resolve));
-  t.after(async () => { await app.server.shutdown(); await new Promise(resolve => malformed.close(resolve)); });
-  for (const [server, expected] of [[app.server, /Failed while creating a room with the host key\. Received HTTP 403; expected 201/], [malformed, /Failed while checking health\. The server did not return valid JSON/]]) {
+  const leaking = createServer((req, res) => {
+    if (req.url === '/healthz') { res.setHeader('Content-Type', 'application/json'); res.end('{"ok":true}'); }
+    else res.end(`<p>${suppliedKey}</p>`);
+  });
+  await new Promise(resolve => leaking.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { await app.server.shutdown(); await Promise.all([malformed, leaking].map(server => new Promise(resolve => server.close(resolve)))); });
+  for (const [server, expected] of [[app.server, /Failed while creating a room with the host key\. Received HTTP 403; expected 201/], [malformed, /Failed while checking health\. The server did not return valid JSON/], [leaking, /Failed while checking the public page\. The host key appears in public HTML\. Treat it as exposed and rotate it/]]) {
     let failure;
     try {
       await promisify(execFile)(process.execPath, ['scripts/check-hosted.mjs', `http://127.0.0.1:${server.address().port}`], { env: { ...process.env, HOST_SETUP_KEY: suppliedKey }, timeout: 15_000 });

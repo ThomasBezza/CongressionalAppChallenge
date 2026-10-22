@@ -106,3 +106,8 @@ Follow [DEMO.md](DEMO.md) for the human-operated phone demonstration.
 Hosting review follow-up: startup diagnostics now explain missing/malformed Render URLs;
 the checker reports safe stage/status details; unavailable rooms give host-specific recovery
 and a neutral fallback for refreshed tabs whose role is no longer known.
+
+A checker-detected key in public HTML now reports exposure explicitly and advises
+rotation without printing its value. Known waiting participants get the same fresh-
+invitation recovery guidance as admitted participants; unknown refreshed tabs retain
+neutral host/participant guidance.

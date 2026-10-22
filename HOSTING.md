@@ -1,6 +1,13 @@
 # Hosted demo
 
-Prepared October 22, 2026. Deployment and live-URL verification are pending.
+Deployed October 22, 2026: https://rehearsal-demo.onrender.com/
+
+Render reports Live from app snapshot 74d69f47a293c4b6c8292c38438ddc9377750bc5.
+Live browser verification passed: two synthetic participants joined, were admitted/readied,
+received a time request through the streams, and received room ending. Health returns200,
+unauthenticated creation403, and ended rooms404. The owner rotated the host key afterward;
+health, public protection and deployed asset hashes were rechecked. No new physical-phone
+or cold-start test has run against this host.
 
 Use one free Render Node web service. This keeps the existing server and room logic;
 no database or framework migration is needed. The stable address is for a small hosted
@@ -20,9 +27,10 @@ same values:
 | Start | `node server.mjs --hosted` |
 | Health check | `/healthz` |
 | Automatic deploys | Off |
-| Secret environment value | `HOST_SETUP_KEY`, a random 256-bit base64 secret |
+| Secret environment value | `HOST_SETUP_KEY`, generated privately in Render (32–128 base64 characters) |
 
-The Blueprint generates the secret. If creating manually, use Render's secret generator.
+The owner created the initial service through the Render form and generated the secret there.
+The Blueprint provides the same settings for recreating the service and generates the secret. If creating manually, use Render's secret generator.
 Keep it in Render Environment; do not commit it, paste it into chat, or include it in a
 video. The app accepts 32–128 base64 characters. `.node-version` pins the locally tested
 Node 24.19.0. The hosted launcher reads Render's `PORT` and `RENDER_EXTERNAL_URL`, binds
@@ -42,7 +50,14 @@ The owner supplied `ThomasBezza/CongressionalAppChallenge-`. GitHub reports it a
 Publish only runnable source, tests, runtime configuration and these operating instructions.
 Keep research, owner conversations, PROJECT.md, HANDOFF.md and EVIDENCE.md local.
 The hosted source is a deployment snapshot; local project history remains authoritative.
-Record its remote commit and the local checkpoint together after publication.
+For an update, use an app-only clone and copy the same allowed paths: .gitignore,
+.node-version, render.yaml, server.mjs, dev, app/rooms.mjs, the four public/ files,
+test/rooms.test.mjs, scripts/check-hosted.mjs, HOSTING.md and DEMO.md, plus the public
+repository's concise README. Commit/push normally from that clone. Never push this local
+project's full history to the public remote or force-push over unknown remote changes.
+The first live app snapshot is `74d69f47a293c4b6c8292c38438ddc9377750bc5`.
+Later documentation-only snapshots do not redeploy the service automatically. The local
+checkpoint/source mapping is recorded in the private project handoff.
 
 ## Free service behavior
 

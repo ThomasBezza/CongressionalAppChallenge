@@ -1,7 +1,10 @@
 # Repeatable phone demo
 
-Use the stable service URL after its deployment is verified. The old tunnel links expired.
-For now the working workflow is verified locally and on the earlier temporary phone preview.
+Stable service: https://rehearsal-demo.onrender.com/
+
+The hosted workflow passed with three developer-controlled browser tabs. The earlier
+physical iPhone/Meet check used the temporary tunnel; a fresh physical-phone run on this
+host remains to do. Old tunnel links expired.
 
 ## Before a run
 
@@ -38,3 +41,14 @@ For now the working workflow is verified locally and on the earlier temporary ph
 
 A successful demo establishes synchronized controls in the tested configuration. It does
 not establish reduced stuttering, broad compatibility, or usefulness to unfamiliar teens.
+
+## Explain the implementation in your own words
+
+- A button sends a JSON action and role credential. Node checks authority and room phase,
+  changes the room, then streams the permitted state to each role. The browser displays
+  confirmed state; it does not decide who is ready or clear another person's request.
+- The stable HTTPS address reaches one hosted Node process. Render handles TLS; Node
+  validates the canonical hostname. The creation key and participant credentials have
+  different jobs, so participants never need the private creation key.
+- Server memory keeps the first version simple, but a restart loses all rooms. Waking
+  the service and creating a fresh invitation make the demonstration repeatable.

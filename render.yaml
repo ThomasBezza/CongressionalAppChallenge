@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: rehearsal-demo
+    runtime: node
+    plan: free
+    region: ohio
+    branch: codex/hosted-rehearsal-room
+    buildCommand: node --test
+    startCommand: node server.mjs --hosted
+    healthCheckPath: /healthz
+    autoDeployTrigger: "off"
+    envVars:
+      - key: HOST_SETUP_KEY
+        generateValue: true

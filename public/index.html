@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light"><title>Rehearsal room</title>
+  <link rel="stylesheet" href="/styles.css"><script type="module" src="/app.js"></script>
+</head>
+<body>
+  <main>
+    <header class="masthead"><a href="/" class="wordmark">rehearsal<span>room</span></a><span class="dev-label">Preview</span></header>
+    <p id="connection" class="connection" role="status">Ready to open a room</p>
+    <p id="pending" class="small" role="status" hidden></p>
+    <div id="error" class="error" role="alert" hidden></div>
+    <div id="app"></div>
+    <p id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+    <footer>Keep this page visible. Audio stays in your call app.<br>No audio, transcripts, or speech scores collected.</footer>
+  </main>
+</body>
+</html>

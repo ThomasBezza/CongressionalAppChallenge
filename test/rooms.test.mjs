@@ -84,6 +84,134 @@ async function start(f) {
   await Promise.all([f.host, f.customer, f.cashier].map(c => c.wait(s => s.phase === 'active')));
 }
 
+const heardOrder = { drink: 'Coffee', size: 'Small', ice: 'Without ice', place: 'To go' };
+async function ticketAction(client, action, extra = {}) {
+  const { data: state } = await client.snapshot();
+  return client.action({ action, attempt: state.attempt, version: state.ticketVersion, ...extra });
+}
+
+test('cashier ticket is opt-in for the customer, status-only for host, absent for waiting users', async t => {
+  const f = await pair(t); await start(f);
+  const waiting = await f.join('Waiting'); await waiting.connect();
+  assert.equal((await ticketAction(f.cashier, 'ticket-share', { fields: heardOrder })).status, 200);
+  await f.customer.wait(s => s.ticket?.response === 'pending');
+  assert.equal(f.customer.state.ticket.edition, 1);
+  assert.equal(f.customer.state.ticket.fields, undefined);
+  assert.equal((await f.host.snapshot()).data.ticket.fields, undefined);
+  assert.equal((await waiting.snapshot()).data.ticket, undefined);
+  assert.equal((await waiting.action({ action: 'ticket-review', attempt: 1, version: 3 })).status, 403);
+  assert.equal((await ticketAction(f.customer, 'ticket-confirm')).status, 409);
+  assert.equal((await ticketAction(f.host, 'ticket-review')).status, 403);
+  assert.equal((await ticketAction(f.customer, 'ticket-share', { fields: heardOrder })).status, 403);
+  const reviewed = await ticketAction(f.customer, 'ticket-review');
+  assert.deepEqual(reviewed.data.state.ticket.fields, heardOrder);
+  assert.equal((await ticketAction(f.cashier, 'ticket-confirm')).status, 403);
+  assert.equal((await ticketAction(f.customer, 'ticket-confirm')).status, 200);
+  await f.cashier.wait(s => s.ticket?.response === 'confirmed');
+  assert.equal(f.cashier.state.phase, 'active');
+  assert.equal((await f.host.snapshot()).data.ticket.fields, undefined);
+});
+
+test('ticket revision requires fresh review and rejects stale confirmations or writes', async t => {
+  const f = await pair(t); await start(f);
+  await ticketAction(f.cashier, 'ticket-share', { fields: heardOrder });
+  const initial = (await ticketAction(f.customer, 'ticket-review')).data.state;
+  await ticketAction(f.customer, 'ticket-correction');
+  await f.cashier.wait(s => s.ticket?.response === 'correction');
+  const revised = { ...heardOrder, size: 'Large' };
+  await ticketAction(f.cashier, 'ticket-share', { fields: revised });
+  assert.equal((await f.customer.action({ action: 'ticket-confirm', attempt: initial.attempt, version: initial.ticketVersion })).status, 409);
+  assert.equal((await f.cashier.action({ action: 'ticket-share', attempt: initial.attempt, version: initial.ticketVersion, fields: heardOrder })).status, 409);
+  const unseen = (await f.customer.snapshot()).data;
+  assert.equal(unseen.ticket.fields, undefined); assert.equal(unseen.ticket.response, 'pending');
+  assert.equal(unseen.ticket.edition, 2);
+  assert.equal((await ticketAction(f.customer, 'ticket-confirm')).status, 409);
+  assert.deepEqual((await ticketAction(f.customer, 'ticket-review')).data.state.ticket.fields, revised);
+  assert.equal((await ticketAction(f.customer, 'ticket-confirm')).status, 200);
+});
+
+test('skipping survives revised tickets until the customer chooses to review again', async t => {
+  const f = await pair(t); await start(f);
+  await ticketAction(f.cashier, 'ticket-share', { fields: heardOrder });
+  await ticketAction(f.customer, 'ticket-skip');
+  const revised = { ...heardOrder, size: 'Large' };
+  await ticketAction(f.cashier, 'ticket-share', { fields: revised });
+  await f.customer.wait(s => s.ticket?.edition === 2);
+  assert.equal(f.customer.state.ticket.response, 'skipped');
+  assert.equal(f.customer.state.ticket.revealed, false);
+  assert.equal(f.customer.state.ticket.fields, undefined);
+  assert.equal((await ticketAction(f.customer, 'ticket-confirm')).status, 409);
+  const review = (await ticketAction(f.customer, 'ticket-review')).data.state;
+  assert.deepEqual(review.ticket.fields, revised); assert.equal(review.ticket.response, 'pending');
+  assert.equal((await ticketAction(f.customer, 'ticket-confirm')).status, 200);
+  await f.customer.action({ action: 'retry' }); await start(f);
+  await ticketAction(f.cashier, 'ticket-share', { fields: heardOrder });
+  const fresh = (await f.customer.snapshot()).data;
+  assert.equal(fresh.ticket.edition, 1); assert.equal(fresh.ticket.response, 'pending');
+});
+
+test('skipping or correcting a ticket leaves time requests, readiness and microphones alone', async t => {
+  const f = await pair(t); await start(f);
+  const session = '11111111-1111-4111-8111-111111111111';
+  await f.request(f.path('audio'), f.customer.token, { action: 'join', session });
+  await f.request(f.path('audio'), f.customer.token, { action: 'mute', session, muted: false });
+  await f.customer.action({ action: 'moment', value: true });
+  await ticketAction(f.cashier, 'ticket-share', { fields: { ...heardOrder, size: '' } });
+  await ticketAction(f.customer, 'ticket-skip');
+  const skipped = (await f.customer.snapshot()).data;
+  assert.equal(skipped.ticket.fields, undefined); assert.equal(skipped.ticket.response, 'skipped');
+  assert.equal(skipped.self.moment, true); assert.equal(skipped.phase, 'active'); assert.equal(skipped.self.ready, true);
+  assert.equal(skipped.audio[0].muted, false);
+  await ticketAction(f.customer, 'ticket-review');
+  await ticketAction(f.customer, 'ticket-correction');
+  assert.equal((await f.customer.snapshot()).data.self.moment, true);
+  await f.customer.action({ action: 'pause' });
+  assert.equal((await ticketAction(f.customer, 'ticket-confirm')).status, 200);
+  assert.equal((await f.customer.snapshot()).data.phase, 'paused');
+});
+
+test('ticket clears on retry, pair replacement, end and expiry; stale attempt actions cannot restore it', async t => {
+  let now = 0;
+  const rooms = new Rooms({ now: () => now, lifetimeMs: 60_000 });
+  const f = await pair(t, { rooms }); await start(f);
+  await ticketAction(f.cashier, 'ticket-share', { fields: heardOrder });
+  const prior = (await f.cashier.snapshot()).data;
+  await f.customer.action({ action: 'retry' });
+  assert.equal((await f.cashier.snapshot()).data.ticket, null);
+  await start(f);
+  assert.equal((await f.cashier.action({ action: 'ticket-share', attempt: prior.attempt, version: prior.ticketVersion, fields: heardOrder })).status, 409);
+  await ticketAction(f.cashier, 'ticket-share', { fields: heardOrder });
+  const oldPair = (await f.cashier.snapshot()).data;
+  await f.customer.action({ action: 'leave' });
+  assert.equal((await f.cashier.snapshot()).data.ticket, null);
+  const replacement = await f.join('New customer'); await replacement.connect();
+  await f.host.action({ action: 'admit', memberId: replacement.state.self.id, role: 'customer' });
+  await replacement.wait(s => s.self.role === 'customer');
+  f.customer = replacement; await start(f);
+  assert.equal((await replacement.snapshot()).data.ticket, null);
+  assert.equal((await f.cashier.action({ action: 'ticket-share', attempt: oldPair.attempt, version: oldPair.ticketVersion, fields: heardOrder })).status, 409);
+  await ticketAction(f.cashier, 'ticket-share', { fields: heardOrder });
+  await f.host.action({ action: 'end' });
+  await f.cashier.wait(s => s.phase === 'ended');
+  assert.equal(f.cashier.state.ticket, null); assert.equal(rooms.rooms.size, 0);
+  const other = await pair(t, { rooms }); await start(other);
+  await ticketAction(other.cashier, 'ticket-share', { fields: heardOrder });
+  now = 60_001; rooms.sweep();
+  await other.cashier.wait(s => s.phase === 'ended');
+  assert.equal(other.cashier.state.ticket, null); assert.equal(rooms.rooms.size, 0);
+});
+
+test('ticket validates bounded menu fields and cannot be shared before the scene', async t => {
+  const f = await pair(t);
+  assert.equal((await ticketAction(f.cashier, 'ticket-share', { fields: heardOrder })).status, 409);
+  await start(f);
+  for (const fields of [null, [], {}, { ...heardOrder, drink: '<script>' }, { ...heardOrder, targetOrder: 'private' }, { drink: '', size: '', ice: '', place: '' }]) {
+    assert.equal((await ticketAction(f.cashier, 'ticket-share', { fields })).status, 400);
+  }
+  assert.equal((await f.cashier.snapshot()).data.ticket, null);
+  assert.equal((await ticketAction(f.cashier, 'ticket-share', { fields: { drink: 'Coffee', size: '', ice: '', place: '' } })).status, 200);
+});
+
 test('real clients receive independent time requests; no actor can clear another person’s request', async t => {
   const f = await pair(t); await start(f);
   assert.equal((await f.customer.action({ action: 'moment', value: true })).status, 200);

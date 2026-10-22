@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { ticketFields } from '../public/content.js';
 
 const secret = () => randomBytes(24).toString('base64url');
 export class RoomError extends Error {
@@ -19,7 +20,7 @@ export class Rooms extends EventEmitter {
     requireThat(this.rooms.size < 100, 503, 'The server is full. Try again after a room ends.');
     const room = {
       id: secret(), invite: secret(), host: { id: 'host', token: secret(), role: 'host', alias: 'Host', connected: false, lastSeen: this.now() },
-      members: new Map(), phase: 'prepare', attempt: 1, revision: 0,
+      members: new Map(), phase: 'prepare', attempt: 1, revision: 0, ticket: null, ticketVersion: 0,
       notice: 'Waiting for two participants and the host.', expiresAt: this.now() + this.lifetimeMs
     };
     this.rooms.set(room.id, room);
@@ -42,6 +43,7 @@ export class Rooms extends EventEmitter {
   participants(room) { return [...room.members.values()].filter(p => p.role); }
   changed(room) { room.revision += 1; this.emit('change', room); }
   resetReadiness(room) { this.participants(room).forEach(p => { p.ready = false; }); }
+  resetTicket(room) { room.ticket = null; room.ticketVersion += 1; }
   pauseRoom(room, notice) {
     this.resetReadiness(room);
     if (room.phase === 'active' || room.phase === 'paused') room.phase = 'paused';
@@ -125,7 +127,14 @@ export class Rooms extends EventEmitter {
     // Waiting users do not receive the group's aliases, roles, or invitation secret.
     if (actor !== room.host && !actor.role) return { ...base, phase: 'waiting', members: [] };
     return {
-      ...base, phase: room.phase, attempt: room.attempt, notice: room.notice,
+      ...base, phase: room.phase, attempt: room.attempt, notice: room.notice, ticketVersion: room.ticketVersion,
+      ticket: room.ticket ? {
+        version: room.ticket.version, edition: room.ticket.edition, response: room.ticket.response,
+        revealed: room.ticket.revealed,
+        // The host sees status only. Customers opt in before receiving the ticket.
+        ...(actor.role === 'cashier' || actor.role === 'customer' && room.ticket.revealed
+          ? { fields: { ...room.ticket.fields } } : {})
+      } : null,
       audio: [room.host, ...this.participants(room)].filter(p => p.connected && p.audio).map(p => ({ id: p.id, alias: p.alias, role: p.role, session: p.audio.session, muted: p.audio.muted })),
       members: this.participants(room).map(p => ({ id: p.id, alias: p.alias, role: p.role, connected: p.connected, ready: p.ready, moment: p.moment, paused: p.paused })),
       ...(actor === room.host ? { invite: room.invite, waiting: [...room.members.values()].filter(p => !p.role).map(p => ({ id: p.id, alias: p.alias, connected: p.connected })) } : {})
@@ -142,7 +151,7 @@ export class Rooms extends EventEmitter {
     if (action === 'leave') {
       requireThat(!isHost, 400, 'Use End room to close a hosted session.');
       room.members.delete(token);
-      if (actor.role) this.pauseRoom(room, `${actor.alias} left. The host can arrange a new pair or end the room.`);
+      if (actor.role) { this.resetTicket(room); this.pauseRoom(room, `${actor.alias} left. The host can arrange a new pair or end the room.`); }
       this.emit('remove', room, token, 'You left the room.'); this.changed(room);
       return { left: true };
     }
@@ -155,6 +164,7 @@ export class Rooms extends EventEmitter {
       if (action === 'remove') {
         requireThat(candidate.role && !candidate.connected && room.phase !== 'active', 409, 'Only a disconnected seat in a paused or preparing room can be released.');
         room.members.delete(candidate.token);
+        this.resetTicket(room);
         this.pauseRoom(room, 'A disconnected seat was released. The host can admit a replacement.');
         this.emit('remove', room, candidate.token, 'The host released your disconnected seat. Ask for a new invitation.');
       } else if (action === 'decline') {
@@ -168,6 +178,7 @@ export class Rooms extends EventEmitter {
         requireThat(candidate.connected, 409, 'This person is disconnected. Wait for them to reconnect.');
         requireThat(!this.participants(room).some(p => p.role === data.role), 409, 'That role is already occupied.');
         candidate.role = data.role;
+        this.resetTicket(room);
         this.resetReadiness(room);
         room.notice = 'Read your role. Both participants choose Ready when they want to begin.';
       }
@@ -179,7 +190,34 @@ export class Rooms extends EventEmitter {
       room.phase = 'active'; room.notice = 'Take the time you need. The cashier responds to what they hear.';
     } else {
       requireThat(isHost || actor.role, 403, 'Wait for the host to admit you before using rehearsal controls.');
-      if (action === 'ready') {
+      if (typeof action === 'string' && action.startsWith('ticket-')) {
+        requireThat(!isHost, 403, 'Only the customer and cashier control the ticket.');
+        requireThat(['active', 'paused'].includes(room.phase), 409, 'Start the conversation before using the ticket.');
+        requireThat(data.attempt === room.attempt && data.version === room.ticketVersion, 409, 'The ticket changed. Review the current ticket and try again.');
+        if (action === 'ticket-share') {
+          requireThat(actor.role === 'cashier', 403, 'Only the cashier can write the ticket.');
+          requireThat(data.fields && typeof data.fields === 'object' && !Array.isArray(data.fields), 400, 'Choose what you heard before sharing the ticket.');
+          requireThat(Object.keys(data.fields).length === ticketFields.length && ticketFields.every(f => Object.hasOwn(data.fields, f.name) && (data.fields[f.name] === '' || f.options.includes(data.fields[f.name]))), 400, 'Choose ticket details from the menu, or leave them unanswered.');
+          requireThat(ticketFields.some(f => data.fields[f.name] !== ''), 400, 'Add at least one detail you heard before sharing the ticket.');
+          room.ticket = {
+            version: ++room.ticketVersion, edition: (room.ticket?.edition || 0) + 1,
+            fields: Object.fromEntries(ticketFields.map(f => [f.name, data.fields[f.name]])),
+            revealed: false, response: room.ticket?.response === 'skipped' ? 'skipped' : 'pending'
+          };
+        } else {
+          requireThat(actor.role === 'customer', 403, 'Only the customer can choose whether to review or confirm the ticket.');
+          requireThat(room.ticket, 409, 'Wait for the cashier to share a ticket.');
+          if (action === 'ticket-review') {
+            room.ticket.revealed = true;
+            if (room.ticket.response === 'skipped') room.ticket.response = 'pending';
+          } else if (action === 'ticket-skip') {
+            room.ticket.revealed = false; room.ticket.response = 'skipped';
+          } else if (action === 'ticket-confirm' || action === 'ticket-correction') {
+            requireThat(room.ticket.revealed, 409, 'Open the current ticket before responding to it.');
+            room.ticket.response = action === 'ticket-confirm' ? 'confirmed' : 'correction';
+          } else throw new RoomError(400, 'Unknown ticket action.');
+        }
+      } else if (action === 'ready') {
         requireThat(!isHost && typeof data.value === 'boolean', 400, 'Only a participant sets their own readiness.');
         requireThat(['prepare', 'paused'].includes(room.phase), 409, 'Readiness is set before starting or resuming.');
         requireThat(!actor.moment, 409, 'Clear your own time request before choosing Ready.');
@@ -197,6 +235,7 @@ export class Rooms extends EventEmitter {
         requireThat(['active', 'paused'].includes(room.phase), 409, 'Start the conversation before requesting a retry.');
         requireThat(room.host.connected && this.participants(room).length === 2 && this.participants(room).every(p => p.connected), 409, 'Wait until the host and both participants are connected.');
         room.phase = 'prepare'; room.attempt += 1; this.resetReadiness(room);
+        this.resetTicket(room);
         // Time requests belong to their owners: retry must not clear another person's.
         room.notice = 'A new attempt was requested. Clear your own time request if needed, then choose Ready.';
       } else throw new RoomError(400, 'Unknown action. Refresh the room and try again.');
@@ -206,7 +245,7 @@ export class Rooms extends EventEmitter {
   }
   close(room, notice) {
     if (!this.rooms.has(room.id)) return;
-    room.phase = 'ended'; room.notice = notice;
+    room.phase = 'ended'; room.notice = notice; this.resetTicket(room);
     this.changed(room); this.emit('closeRoom', room);
     this.rooms.delete(room.id); room.members.clear(); room.invite = ''; room.host.token = '';
   }

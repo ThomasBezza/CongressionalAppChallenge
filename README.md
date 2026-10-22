@@ -19,6 +19,13 @@ authenticated setup messages. STUN-only connections may fail on some networks.
 Optional short-lived TURN configuration and real-device checks are in [VOICE.md](VOICE.md).
 Automated media tests use fakes and do not prove actual sound delivery.
 
+## Optional order ticket
+
+The cashier selects what they understood and shares a temporary ticket. The customer
+can review, ask for a change, confirm or skip. There is no score or intended-order form.
+A time request quiets the review controls; skipping persists across revisions. Tickets
+clear on retry, pair changes or room ending.
+
 ## Hosting and limits
 
 See [HOSTING.md](HOSTING.md), [DEMO.md](DEMO.md) and render.yaml. Hosted mode requires

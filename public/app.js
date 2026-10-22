@@ -1,4 +1,4 @@
-import { norms, briefs } from './content.js';
+import { norms, briefs, ticketFields } from './content.js';
 import { VoiceCall } from './voice.js';
 
 const app = document.getElementById('app');
@@ -14,6 +14,7 @@ let credentials = null, invitation = null, state = null, online = false, busy = 
 let controller = null, heartbeat = null, generation = 0, lastFrame = 0, ending = false;
 let joinAlias = '';
 let pendingLabel = '';
+let ticketDraft = null, ticketContext = '';
 const voicePanel = document.getElementById('voice-panel');
 const voice = new VoiceCall({
   send: (access, name, data) => request(`/api/rooms/${access.roomId}/${name}`, data, undefined, access),
@@ -98,6 +99,7 @@ function apply(next) {
   if (state && next.revision < state.revision) return;
   const oldSummary = summary(); state = next;
   if (next.phase === 'ended') {
+    ticketDraft = null; ticketContext = '';
     stopStream(); online = false; forgetAccess();
     connection.textContent = 'Room closed'; connection.className = 'connection';
   }
@@ -111,7 +113,8 @@ function summary() {
   if (!state) return '';
   const holds = state.members?.filter(p => p.connected && p.moment).map(p => p.alias) || [];
   if (holds.length) return `${holds.join(' and ')} ${holds.length === 1 ? 'needs' : 'need'} a moment.`;
-  return { waiting:'Waiting for the host.', prepare:'Prepare for the conversation.', active:'Conversation is active.', paused:'Conversation paused. Check readiness before resuming.', ended:'This room has ended.' }[state.phase] || '';
+  const phase = { waiting:'Waiting for the host.', prepare:'Prepare for the conversation.', active:'Conversation is active.', paused:'Conversation paused. Check readiness before resuming.', ended:'This room has ended.' }[state.phase] || '';
+  return state.ticket ? `${phase} ${ticketStatus(state.ticket, state.self.role)}` : phase;
 }
 function setConnection(value, rerender = true) {
   const wasOffline = !online;
@@ -131,6 +134,7 @@ function stopStream() {
   stopped = true; generation++; controller?.abort(); clearInterval(heartbeat); heartbeat = null;
 }
 function finishLocal(message) {
+  ticketDraft = null; ticketContext = '';
   voice.sync(null, false, null);
   document.body.classList.remove('taking-moment', 'listener-hold');
   forgetAccess(); pendingLabel = '';
@@ -209,6 +213,7 @@ async function connectStream() {
   }
 }
 function openRoom(roomId, token) {
+  ticketDraft = null; ticketContext = '';
   credentials = { roomId, token }; invitation = null; state = null; online = false;
   // Keep role authority out of the visible address bar, including during screen sharing.
   try { sessionStorage.setItem(`rehearsal:${roomId}`, token); }
@@ -224,9 +229,38 @@ async function command(data) {
     const result = await request(endpoint('action'), data);
     if (result.left) finishLocal('You left the room.');
     else if (result.ended) finishLocal('You ended the room for everyone.');
-    else if (result.state) apply(result.state);
+    else if (result.state) { if (data.action === 'ticket-share') ticketDraft = null; apply(result.state); }
   } catch (err) { error(`${err.message} The action was not confirmed here.`); }
   finally { busy = false; pendingLabel = ''; render(); }
+}
+function ticketStatus(ticket, role) {
+  if (ticket.response === 'confirmed') return role === 'customer' ? 'You confirmed: that’s what you wanted.' : 'The customer confirmed: that’s what they wanted.';
+  if (ticket.response === 'correction') return role === 'customer' ? 'Talk through what you’d like changed.' : 'The customer would like a change. Ask them what to change.';
+  if (ticket.response === 'skipped') return role === 'customer' ? `${ticket.edition > 1 ? 'The cashier updated the ticket. ' : ''}You skipped the review. You can keep talking.` : 'The customer skipped the ticket review. You can keep talking.';
+  return role === 'customer' ? ticket.revealed ? 'Check what the cashier understood. You can confirm or ask for a change.' : ticket.edition > 1 ? 'The cashier updated the ticket. You can review the changes or skip them.' : 'The cashier shared a ticket. You can review it or skip it.' : ticket.revealed ? 'The customer is reviewing the ticket.' : 'The ticket is shared. Reviewing it is the customer’s choice.';
+}
+function ticketPanel() {
+  if (!['active', 'paused'].includes(state.phase)) { ticketDraft = null; ticketContext = ''; return ''; }
+  const role = state.self.role, ticket = state.ticket;
+  const action = (id, text, name, cls = '') => button(id, text, name, { cls, disabled: !online, waiting: busy, independent: true, version: state.ticketVersion, attempt: state.attempt });
+  const status = ticket ? `<p>${escape(ticketStatus(ticket, role))}</p>` : '';
+  if (role === 'host') return ticket ? `<section class="panel"><h2>Order ticket</h2>${status}<p class="small">The ticket details are for the customer and cashier.</p></section>` : '';
+  if (role === 'cashier') {
+    const context = `${state.roomId}:${state.attempt}:${state.members.map(p => p.id).join(':')}`;
+    if (context !== ticketContext || !ticketDraft || !ticketDraft.dirty && ticketDraft.version !== state.ticketVersion) {
+      ticketContext = context;
+      ticketDraft = { version: state.ticketVersion, dirty: false, fields: Object.fromEntries(ticketFields.map(f => [f.name, ticket?.fields?.[f.name] || ''])) };
+    }
+    const stale = ticketDraft.version !== state.ticketVersion;
+    return `<section class="ticket-sheet" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">Write the order ticket</h2><p id="ticket-choice-help">Choose what you understood. Tap a selected choice again to leave it unanswered.</p>${status}${stale ? `<p class="voice-alert">The shared ticket changed in another view. Load it before editing again.</p>${button('ticket-reload', 'Load the shared ticket', 'ticket-reload')}` : ''}<form id="ticket-form"><div class="ticket-fields">${ticketFields.map(f => `<fieldset aria-describedby="ticket-choice-help"><legend>${escape(f.label)}</legend><div class="ticket-choices">${f.options.map((value, i) => button(`ticket-${f.name}-${i}`, value, 'ticket-choice', { pressed: ticketDraft.fields[f.name] === value, disabled: !online || stale, waiting: busy, independent: true, field: f.name, choice: value })).join('')}</div></fieldset>`).join('')}</div><button id="ticket-share" class="primary" type="submit" ${busy ? 'aria-disabled="true"' : ''} ${!online || stale || !Object.values(ticketDraft.fields).some(Boolean) ? 'disabled' : ''}>${busy ? 'Sharing…' : ticket ? 'Share revised ticket' : 'Share ticket'}</button></form><p class="small">Unshared edits stay in this tab. Sharing offers an optional review; it doesn’t end the conversation. The ticket disappears when you retry or the room closes.</p></section>`;
+  }
+  if (!ticket) return '';
+  if (state.self.moment) return `<section class="panel ticket-later" aria-label="Order ticket"><p class="small">${ticket.edition > 1 ? 'The cashier updated the ticket for later.' : 'The cashier shared a ticket for later.'} It can wait until you’re ready to go on.</p></section>`;
+  const details = ticket.revealed ? `<dl class="menu-options">${ticketFields.map(f => `<div><dt>${escape(f.label)}</dt><dd>${escape(ticket.fields[f.name] || 'Not heard yet')}</dd></div>`).join('')}</dl><p class="small">This is what the cashier understood. You can clarify anything, including an unanswered detail.</p>` : '';
+  const controls = !ticket.revealed
+    ? `${action('ticket-review', ticket.response === 'skipped' ? 'Review the ticket after all' : 'Review the ticket', 'ticket-review', ticket.response === 'skipped' ? 'quiet' : 'primary')}${ticket.response !== 'skipped' ? action('ticket-skip', 'Skip review', 'ticket-skip', 'quiet') : ''}`
+    : `${ticket.response !== 'confirmed' ? action('ticket-confirm', 'That’s what I wanted', 'ticket-confirm', 'primary') : ''}${ticket.response !== 'correction' ? action('ticket-correction', 'I’d like a change', 'ticket-correction') : ''}${action('ticket-skip', 'Skip review', 'ticket-skip', 'quiet')}`;
+  return `<section class="${ticket.revealed ? 'ticket-sheet' : 'panel ticket-offer'}" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">${ticket.revealed ? 'The cashier’s ticket' : ticket.response === 'skipped' ? 'Order ticket' : ticket.edition > 1 ? 'The cashier updated the ticket' : 'Your cashier has a ticket ready'}</h2>${status}${details}<div class="buttons">${controls}</div>${ticket.revealed ? '<p class="small">Reviewing is optional. Nothing is scored or saved after the room closes.</p>' : ''}</section>`;
 }
 function render() {
   voice.sync(state, online, credentials);
@@ -284,6 +318,7 @@ function render() {
       ${isHost ? hostPanel(state) : ''}
       <div id="voice-panel-slot"></div>
       <section class="menu-sheet" aria-labelledby="menu-title"><h2 id="menu-title">Tea &amp; Coffee</h2><dl class="menu-options"><div><dt>Drink</dt><dd>Iced tea or coffee</dd></div><div><dt>Size</dt><dd>Small or large</dd></div><div><dt>Ice</dt><dd>With or without</dd></div><div><dt>To have it</dt><dd>Here or to go</dd></div></dl><p class="menu-note">This café is made up for practice. Keep your order in your head or on your own paper.</p></section>
+      ${ticketPanel()}
       <section class="people"><h2>${online ? 'Who’s here' : 'Who was here before the connection dropped'}</h2><p class="small">${isHost ? 'You’re the host.' : state.hostConnected ? 'The host is here.' : 'The host has disconnected. Wait for them to come back.'} <span data-audio-for="host"></span></p><ul class="pair">${pair.map(p => `<li><span class="person-initial" aria-hidden="true">${escape([...p.alias][0]?.toLocaleUpperCase())}</span><strong>${escape(p.id === state.self.id ? p.alias + ' (you)' : p.alias)}<span class="role-name">${escape(roleName(p.role))}</span></strong><span class="person-state ${p.moment ? 'moment' : ''}">${!p.connected ? 'Disconnected' : p.moment ? 'Taking a moment' : p.ready ? 'Ready' : state.phase === 'active' ? 'Here' : 'Getting ready'}</span><span class="audio-line" data-audio-for="${escape(p.id)}"></span>${isHost && !p.connected ? button(`remove-${p.id}`,'Release disconnected seat','remove',{member:p.id,disabled:!online || state.phase==='active'}) : ''}</li>`).join('') || '<li>Nobody has been let in yet.</li>'}</ul></section>
       <details class="room-details" id="guidance"><summary>Your role and how to listen</summary><p>${escape(briefs[state.self.role])}</p><p>${escape(norms)}</p></details>
       <details class="room-details" id="session-options"><summary>More options</summary><div data-voice-options></div>${retry}<p class="small">This is attempt ${state.attempt}. The room closes at ${escape(new Date(state.expiresAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))}.</p>
@@ -305,7 +340,7 @@ function render() {
   }
   for (const id of openDetails) { const node = document.getElementById(id); if (node) node.open = true; }
   renderVoice();
-  if (focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
+  if (focusId) (document.getElementById(focusId) || (focusId.startsWith('ticket-') ? document.getElementById('ticket-title') : null))?.focus({ preventScroll: true });
 }
 function hostPanel(room) {
   const url = `${publicPreviewOrigin || location.origin}/#join=${room.roomId}.${room.invite}`;
@@ -326,6 +361,11 @@ async function createRoom() {
   } finally { busy = false; render(); }
 }
 app.addEventListener('submit', async event => {
+  if (event.target.id === 'ticket-form') {
+    event.preventDefault(); if (busy || !ticketDraft) return;
+    await command({ action: 'ticket-share', attempt: state.attempt, version: ticketDraft.version, fields: { ...ticketDraft.fields } });
+    return;
+  }
   if (event.target.id === 'host-key-form') {
     event.preventDefault(); if (busy) return;
     previewHostKey = String(new FormData(event.target).get('hostKey') || '').trim();
@@ -351,12 +391,21 @@ app.addEventListener('click', async event => {
     const input = document.getElementById('invite-link');
     try { await navigator.clipboard.writeText(input.value); announcement.textContent = 'Invitation link copied.'; }
     catch { input.focus(); input.select(); error('Copy the selected participant invitation manually.'); }
-  } else if (action === 'end-prompt' || action === 'cancel-end') { ending = action === 'end-prompt'; render(); }
+  } else if (action === 'ticket-choice') {
+    if (!ticketDraft || !online || busy || ticketDraft.version !== state.ticketVersion) return;
+    const field = ticketFields.find(f => f.name === node.dataset.field);
+    if (!field?.options.includes(node.dataset.choice)) return;
+    ticketDraft.fields[field.name] = ticketDraft.fields[field.name] === node.dataset.choice ? '' : node.dataset.choice;
+    ticketDraft.dirty = true; render();
+  } else if (action === 'ticket-reload') { ticketDraft = null; render(); }
+  else if (action === 'end-prompt' || action === 'cancel-end') { ending = action === 'end-prompt'; render(); }
   else {
     const data = { action };
     if (node.dataset.value !== undefined) data.value = node.dataset.value === 'true';
     if (node.dataset.member) data.memberId = node.dataset.member;
     if (node.dataset.role) data.role = node.dataset.role;
+    if (node.dataset.version) data.version = Number(node.dataset.version);
+    if (node.dataset.attempt) data.attempt = Number(node.dataset.attempt);
     await command(data);
   }
 });

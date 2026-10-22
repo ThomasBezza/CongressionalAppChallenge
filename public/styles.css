@@ -36,7 +36,7 @@ body.taking-moment { background: var(--moment-wash); }
 main { max-width: 600px; margin: auto; padding: 20px 24px 40px; }
 html.has-room-controls { scroll-padding-bottom: calc(var(--dock-height, 240px) + 20px); }
 .in-room main { padding-bottom: calc(var(--dock-height, 240px) + 32px); }
-.in-room :is(button, summary, input) { scroll-margin-bottom: 20px; }
+.in-room :is(button, summary, input, select) { scroll-margin-bottom: 20px; }
 h1, h2, h3, p, li, dd, label { text-wrap: pretty; }
 
 /* Header and status */
@@ -82,13 +82,13 @@ button.quiet:hover:not(:disabled) { background: transparent; text-decoration-thi
 button.danger { color: var(--error); box-shadow: inset 0 0 0 1.5px var(--error); }
 button:disabled, button[aria-disabled=true] { opacity: .45; cursor: not-allowed; }
 button:active:not(:disabled):not([aria-disabled=true]) { transform: translateY(1px); }
-:is(button, a, input, summary):focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+:is(button, a, input, select, summary):focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .buttons { display: flex; flex-wrap: wrap; gap: 10px; }
 .buttons > * { flex: 1 1 140px; }
 
 /* Forms */
 label { display: block; margin: 4px 0 8px; font-weight: 700; }
-input { width: 100%; min-height: 50px; padding: 12px 14px; border: 1.5px solid var(--field); border-radius: var(--r-control); background: var(--card); color: var(--ink); font: inherit; }
+input, select { width: 100%; min-height: 50px; padding: 12px 14px; border: 1.5px solid var(--field); border-radius: var(--r-control); background: var(--card); color: var(--ink); font: inherit; }
 input:focus-visible { border-color: var(--ink); }
 form button { margin-top: 14px; width: 100%; }
 input.invite { font-size: .86rem; margin: 10px 0; color: var(--muted); }
@@ -106,6 +106,18 @@ input.invite { font-size: .86rem; margin: 10px 0; color: var(--muted); }
 .menu-options dt { color: var(--muted); font-size: .88rem; padding-top: 2px; }
 .menu-options dd { margin: 0; font-weight: 700; }
 .menu-note { margin: 14px 0 0; padding-top: 12px; border-top: 1px dotted var(--rule); font: italic .98rem/1.45 var(--serif); color: var(--muted); }
+.ticket-sheet { margin: 0 0 28px; padding: 24px; background: var(--card); border-radius: 4px; box-shadow: 0 1px 2px rgba(31,27,22,.08); }
+.ticket-sheet h2 { font: italic 500 1.65rem/1.2 var(--serif); }
+.ticket-fields { display: grid; gap: 16px; }
+.ticket-fields fieldset { border: 0; min-width: 0; margin: 0; padding: 0; }
+.ticket-fields legend { margin-bottom: 8px; padding: 0; font-weight: 700; font-size: .94rem; }
+.ticket-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.ticket-choices button { margin: 0; padding: 10px 8px; min-height: 50px; }
+.ticket-choices button[aria-pressed=true] { background: var(--ink); color: var(--sheet); box-shadow: none; }
+.ticket-choices button[aria-pressed=true]:hover { background: var(--ink-hover); }
+.ticket-offer .buttons { margin-top: 12px; }
+.ticket-sheet .buttons { margin-top: 18px; }
+.ticket-sheet .small { margin-top: 16px; }
 
 /* People: a list with faces, not a grid of cards */
 .people { margin: 0 0 16px; }
@@ -171,7 +183,7 @@ a { color: var(--ink); text-underline-offset: 3px; }
 
 @media (max-width: 360px) {
   main, .control-dock { padding-left: 16px; padding-right: 16px; }
-  .menu-sheet { padding: 22px 18px 18px; }
+  .menu-sheet, .ticket-sheet { padding: 22px 18px 18px; }
 }
 @media (min-width: 700px) {
   main { padding-top: 36px; }

@@ -8,13 +8,13 @@ participants cannot receive its roster or signaling. No video, recording or tran
 1. Leave Meet or any other call first so its microphone does not compete with this one.
 2. Create/join a rehearsal room. The host admits the pair normally.
 3. Each person chooses **Join audio** and allows microphone access. Everyone starts muted.
-4. Choose **Unmute microphone** to speak. Use headphones when devices are near each other.
+4. Tap the round **Muted** microphone control (or **Unmute** in the audio card) to speak. Use headphones when devices are near each other.
 5. **Leave audio** stops capture without leaving the rehearsal. Leaving/ending the room
    or losing its live connection also stops capture. Rejoining audio is explicit.
 
 The host can join as a third voice; readiness still belongs to the two participants.
 Time requests and rehearsal pauses leave microphone choices with each person. They do
-not mute others. If Safari blocks playback, choose **Hear room audio**. If a connection
+not mute others. If Safari blocks playback, choose **Tap to hear the room**. If a connection
 fails, leave audio/rejoin. Avoid duplicated tabs for the same role's call.
 
 ## Connectivity and relay setup
@@ -49,8 +49,12 @@ messages are bounded by size and rate. A role cannot open concurrent audio sessi
 duplicate tabs. Media elements are outside the room renderer so menu/state updates do
 not replace playback. Disconnect/expiry/end releases call membership and local capture.
 
-Actual two-device audio, three simultaneous voices, TURN/network reachability, Safari
-playback/microphone behavior and interruption recovery require real-device verification.
+Owner-operated two-device verification on October22 passed native audio from iPhone
+Safari to Mac headphones and the reverse path to the phone speaker. A time request
+stayed visible through mic changes; room ending stopped audio and mic indicators on
+both. This was one person, sequential directions, not a real peer conversation. Three
+simultaneous voices, TURN/network reachability, broader Safari behavior and interruption
+recovery still need verification.
 The old Meet coexistence check establishes only that earlier separate-call setup.
 
 ## Sources checked October 22, 2026

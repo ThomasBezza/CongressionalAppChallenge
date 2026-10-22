@@ -11,10 +11,57 @@ tunnel; audio was not repeated during this hosted check. Old tunnel links expire
 
 Owner selected audio inside the app for all three roles. Use [VOICE.md](VOICE.md) for
 the new microphone/call workflow and verification limits. Leave Meet before testing
-native audio. The original separate-call walkthrough below remains a fallback and
+native audio. Owner-operated native sound now passed sequentially in both directions between an
+iPhone13Pro/Safari Customer and Mac Cashier. A time request survived mic changes, and
+room ending stopped sound/mic indicators on both. Host stayed outside audio. No actual
+second person or three-voice check. The original separate-call walkthrough below remains a fallback and
 a historical record. Do not repeat its baseline merely to prove the new voice code.
 
-## Before a run
+## Show the native audio version
+
+1. Create a fresh room, admit the customer and cashier, and let each role optionally
+   join audio. All microphones start muted. Use headphones for nearby devices.
+2. Both participants tap I’m ready; host starts. Unmute the person speaking. If one
+   operator is using nearby devices, keep only one microphone unmuted at a time.
+3. Cashier says, “Hi, what would you like?” Customer begins a privately chosen menu
+   order, taps Give me a moment, and shows the receiving view. Keep the request visible
+   while explaining that mic mute is a separate control; no need to imitate stuttering.
+4. Customer taps I’m ready to go on and finishes the order. Cashier reads it back;
+   customer confirms or corrects it. Host ends the room. Confirm audio stops.
+
+Owner completed this short scene on October22 and reported “Completed without
+confusion.” Codex observed admission, readiness, start and ending; the order/readback
+and request/clear completion are owner-reported. This was a one-operator technical check, not independent user research.
+
+Label a one-operator walkthrough as a technical demonstration. The completed device
+check supports functional claims; it does not show independent teen use or improvement
+in stuttering. Cold-start and long-lock checks are deferred, not recording gates.
+
+## Optional ticket walkthrough
+
+1. Start a café scene as above. The customer keeps their
+   intended order private. Cashier chooses what they heard on the order ticket; leaving
+   a detail unanswered is allowed. Nothing reaches the customer before sharing.
+2. Cashier selects Share ticket. Customer chooses Review the ticket or Skip review.
+   If reviewing, they can select I’d like a change and explain it in the conversation.
+3. Cashier edits and shares the revised ticket. Customer opens the new version, then
+   can select That’s what I wanted. This is the customer’s confirmation, not a score.
+4. Show that the time request remains until its owner clears it and the mic is separate.
+   Retry clears the ticket and requires readiness again. End the room when finished.
+
+The cashier now uses paired tap choices; tap a selected choice again to leave it
+unanswered. For the focused phone check, toggle the other device’s microphone while
+the cashier selects details. During a customer time request, sharing should show only
+a quiet ticket-for-later line. Clear the moment, skip review, then revise: the customer
+should still see only an optional underlined way to review after all. Pause/resume
+announcements should name the phase explicitly. This physical-phone follow-up is open.
+
+Automated checks and developer browser use cover this addition. Actual iPhone use of
+the ticket has not run yet.
+
+## Earlier separate-call walkthrough (historical)
+
+### Before a run
 
 1. Open the home page on the Mac. If Render is waking, wait for the real Ordering food
    page before creating a room. Keep automatic deploys off during a session.

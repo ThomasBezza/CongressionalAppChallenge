@@ -7,13 +7,15 @@
 </head>
 <body>
   <main>
-    <header class="masthead"><a href="/" class="wordmark">rehearsal<span>room</span></a><span class="dev-label">Preview</span></header>
-    <p id="connection" class="connection" role="status">Ready to open a room</p>
+    <header class="masthead"><a href="/" class="wordmark">Rehearsal Room</a></header>
+    <div class="status-row"><p id="connection" class="connection" role="status" hidden>Not connected</p><p id="voice-status" class="connection voice" hidden></p></div>
     <p id="pending" class="small" role="status" hidden></p>
     <div id="error" class="error" role="alert" hidden></div>
+    <section id="voice-panel" class="panel voice-panel" aria-label="Room audio" hidden></section>
     <div id="app"></div>
+    <div id="remote-audio" aria-hidden="true"></div>
     <p id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></p>
-    <footer>Keep this page visible. Audio stays in your call app.<br>No audio, transcripts, or speech scores collected.</footer>
+    <footer>Keep this page open while you practice. Nothing you say is recorded or transcribed. This is a working preview.</footer>
   </main>
 </body>
 </html>

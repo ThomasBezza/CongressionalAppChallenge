@@ -65,6 +65,7 @@ export class Rooms extends EventEmitter {
     if (actor.connected === connected) return;
     actor.connected = connected;
     if (!connected) {
+      actor.audio = null;
       actor.ready = false; actor.moment = false; actor.paused = false;
       if (actor.role) this.pauseRoom(room, `${actor.role === 'host' ? 'Host' : actor.alias} disconnected. Reconnect and check readiness before continuing.`);
     } else if (actor.role && actor.role !== 'host') {
@@ -77,6 +78,46 @@ export class Rooms extends EventEmitter {
     requireThat(actor.connected, 409, 'Reconnect to the live room before sending actions.');
     actor.lastSeen = this.now();
   }
+  audioActor(room, token) {
+    const actor = this.actor(room, token);
+    requireThat(actor.role && actor.connected && room.phase !== 'ended', 403, 'Join the live room and wait for admission before using audio.');
+    return actor;
+  }
+  audioCommand(room, token, data) {
+    const actor = this.audioActor(room, token);
+    requireThat(typeof data.session === 'string' && /^[a-zA-Z0-9-]{36}$/.test(data.session), 400, 'Rejoin audio to start a fresh call connection.');
+    if (data.action === 'join') {
+      requireThat(!actor.audio || actor.audio.session === data.session, 409, 'Audio is already open in another tab for this role. Leave audio there first.');
+      actor.audio ||= { session: data.session, muted: true, window: this.now(), count: 0 };
+    } else {
+      // A late leave from a previous tab/session cannot clear a replacement call.
+      if (data.action === 'leave' && !actor.audio) return { state: this.view(room, token) };
+      requireThat(actor.audio?.session === data.session, 409, 'This audio connection is no longer current. Leave and rejoin audio.');
+      if (data.action === 'leave') actor.audio = null;
+      else if (data.action === 'mute' && typeof data.muted === 'boolean') actor.audio.muted = data.muted;
+      else throw new RoomError(400, 'Choose join, mute or leave audio.');
+    }
+    actor.lastSeen = this.now(); this.changed(room);
+    return { state: this.view(room, token) };
+  }
+  audioSignal(room, token, data) {
+    const actor = this.audioActor(room, token);
+    requireThat(actor.audio?.session === data.session, 409, 'Rejoin audio before connecting the call.');
+    const target = [room.host, ...this.participants(room)].find(p => p.id === data.to);
+    requireThat(target && target !== actor && target.connected && target.audio?.session === data.toSession, 409, 'That audio participant has left or rejoined.');
+    const message = data.message;
+    const description = message?.description;
+    const candidate = message?.candidate;
+    const validDescription = description && ['offer', 'answer'].includes(description.type) && typeof description.sdp === 'string' && description.sdp.length <= 16000 && description.sdp.startsWith('v=0');
+    const validCandidate = candidate && typeof candidate.candidate === 'string' && candidate.candidate.length <= 2048 && (candidate.sdpMid === null || typeof candidate.sdpMid === 'string' && candidate.sdpMid.length <= 64) && (candidate.sdpMLineIndex === null || Number.isInteger(candidate.sdpMLineIndex) && candidate.sdpMLineIndex >= 0 && candidate.sdpMLineIndex < 16);
+    requireThat(Boolean(validDescription) !== Boolean(validCandidate), 400, 'The call connection message is invalid. Rejoin audio.');
+    if (this.now() - actor.audio.window >= 10000) { actor.audio.window = this.now(); actor.audio.count = 0; }
+    requireThat(++actor.audio.count <= 120, 429, 'Too many call connection messages. Wait a moment and rejoin audio.');
+    // Only selected fields reach the recipient; never broadcast SDP/candidates in snapshots.
+    const clean = validDescription ? { description: { type: description.type, sdp: description.sdp } }
+      : { candidate: { candidate: candidate.candidate, sdpMid: candidate.sdpMid, sdpMLineIndex: candidate.sdpMLineIndex } };
+    return { targetToken: target.token, signal: { from: actor.id, session: actor.audio.session, toSession: target.audio.session, message: clean } };
+  }
   view(room, token) {
     const actor = this.actor(room, token);
     const self = { id: actor.id, alias: actor.alias, role: actor.role, ready: Boolean(actor.ready), moment: Boolean(actor.moment), paused: Boolean(actor.paused) };
@@ -85,6 +126,7 @@ export class Rooms extends EventEmitter {
     if (actor !== room.host && !actor.role) return { ...base, phase: 'waiting', members: [] };
     return {
       ...base, phase: room.phase, attempt: room.attempt, notice: room.notice,
+      audio: [room.host, ...this.participants(room)].filter(p => p.connected && p.audio).map(p => ({ id: p.id, alias: p.alias, role: p.role, session: p.audio.session, muted: p.audio.muted })),
       members: this.participants(room).map(p => ({ id: p.id, alias: p.alias, role: p.role, connected: p.connected, ready: p.ready, moment: p.moment, paused: p.paused })),
       ...(actor === room.host ? { invite: room.invite, waiting: [...room.members.values()].filter(p => !p.role).map(p => ({ id: p.id, alias: p.alias, connected: p.connected })) } : {})
     };

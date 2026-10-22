@@ -23,7 +23,7 @@ async function fixture(t, options = {}) {
   const path = endpoint => `/api/rooms/${room.roomId}/${endpoint}`;
   function client(token) {
     const c = {
-      token, state: null, states: [], controller: null, listeners: new Set(),
+      token, state: null, states: [], signals: [], controller: null, listeners: new Set(),
       action: data => request(path('action'), token, data),
       snapshot: () => request(path('state'), token),
       async connect() {
@@ -36,8 +36,9 @@ async function fixture(t, options = {}) {
             buffer += decoder.decode(chunk, { stream: true }); let index;
             while ((index = buffer.indexOf('\n\n')) !== -1) {
               const frame = buffer.slice(0, index); buffer = buffer.slice(index + 2);
-              if (!frame.startsWith('event: state\n')) continue;
-              this.state = JSON.parse(frame.split('\ndata: ')[1]); this.states.push(this.state);
+              if (frame.startsWith('event: audio-signal\n')) this.signals.push(JSON.parse(frame.split('\ndata: ')[1]));
+              else if (frame.startsWith('event: state\n')) { this.state = JSON.parse(frame.split('\ndata: ')[1]); this.states.push(this.state); }
+              else continue;
               for (const listener of this.listeners) listener();
             }
           }
@@ -373,4 +374,82 @@ test('deployment check CLI identifies wrong keys, malformed responses and public
     assert.ok(!failure.stdout.includes(suppliedKey));
   }
   assert.equal(app.rooms.rooms.size, 0);
+});
+
+test('audio admission, ownership and targeted signaling exclude waiting users and stale sessions', async t => {
+  const f = await pair(t);
+  const waiting = await f.join('Waiting listener'); await waiting.connect();
+  const sessions = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'];
+  const audio = (client, data) => f.request(f.path('audio'), client.token, data);
+  assert.equal((await audio(waiting, { action: 'join', session: sessions[0] })).status, 403);
+  assert.equal((await f.request(f.path('audio-config'), waiting.token)).status, 403);
+  for (const [i, client] of [f.host, f.customer, f.cashier].entries()) {
+    assert.equal((await audio(client, { action: 'join', session: sessions[i] })).status, 200);
+  }
+  await f.host.wait(s => s.audio.length === 3);
+  assert.equal((await waiting.snapshot()).data.audio, undefined);
+  assert.equal((await audio(f.customer, { action: 'join', session: sessions[0] })).status, 409);
+  const signal = { session: sessions[1], to: f.cashier.state.self.id, toSession: sessions[2], message: { description: { type: 'offer', sdp: 'v=0\r\nsynthetic-offer' }, ignored: 'do not relay extra fields' } };
+  assert.equal((await f.request(f.path('audio-signal'), f.customer.token, signal)).status, 200);
+  await f.cashier.wait(() => f.cashier.signals.length === 1);
+  assert.equal(f.cashier.signals[0].from, f.customer.state.self.id);
+  assert.equal(f.cashier.signals[0].message.ignored, undefined);
+  assert.equal(f.host.signals.length, 0); assert.equal(waiting.signals.length, 0);
+  assert.equal(JSON.stringify((await f.host.snapshot()).data).includes('synthetic-offer'), false);
+  assert.equal((await f.request(f.path('audio-signal'), waiting.token, signal)).status, 403);
+  assert.equal((await f.request(f.path('audio-signal'), f.customer.token, { ...signal, toSession: sessions[0] })).status, 409);
+  assert.equal((await audio(f.customer, { action: 'mute', session: sessions[1], muted: false })).status, 200);
+  await f.host.wait(s => s.audio.find(p => p.role === 'customer')?.muted === false);
+  await audio(f.customer, { action: 'leave', session: sessions[1] });
+  await f.host.wait(s => s.audio.length === 2);
+  assert.equal((await f.request(f.path('audio-signal'), f.customer.token, signal)).status, 409);
+  assert.equal((await audio(f.customer, { action: 'join', session: sessions[0] })).status, 200);
+  assert.equal((await audio(f.customer, { action: 'leave', session: sessions[1] })).status, 409);
+  await f.host.action({ action: 'end' });
+  assert.equal((await audio(f.cashier, { action: 'join', session: sessions[2] })).status, 404);
+});
+
+test('audio signals are bounded; disconnect clears call membership and requires explicit audio rejoin', async t => {
+  const f = await pair(t, { disconnectGraceMs: 10 });
+  const session = '11111111-1111-4111-8111-111111111111';
+  const otherSession = '22222222-2222-4222-8222-222222222222';
+  for (const [client, value] of [[f.customer, session], [f.cashier, otherSession]]) await f.request(f.path('audio'), client.token, { action: 'join', session: value });
+  const signal = { session, to: f.cashier.state.self.id, toSession: otherSession, message: { description: { type: 'offer', sdp: 'v=0' } } };
+  assert.equal((await f.request(f.path('audio-signal'), f.customer.token, { ...signal, message: { description: { type: 'offer', sdp: 'x'.repeat(16001) } } })).status, 400);
+  assert.equal((await f.request(f.path('audio-signal'), f.customer.token, { ...signal, message: { candidate: { candidate: 'x', sdpMid: null, sdpMLineIndex: -1 } } })).status, 400);
+  for (let i = 0; i < 120; i++) assert.equal((await f.request(f.path('audio-signal'), f.customer.token, signal)).status, 200);
+  assert.equal((await f.request(f.path('audio-signal'), f.customer.token, signal)).status, 429);
+  f.customer.close();
+  await f.host.wait(s => !s.audio.some(p => p.role === 'customer'));
+  await f.customer.connect();
+  assert.equal((await f.customer.snapshot()).data.audio.some(p => p.role === 'customer'), false);
+});
+
+test('relay config requires admission, caches bounded short-lived credentials and masks provider errors', async t => {
+  let calls = 0;
+  const f = await pair(t, { getIceConfig: async () => { calls++; return { iceServers: [], relay: true }; } });
+  assert.equal((await f.request(f.path('audio-config'), f.customer.token)).status, 200);
+  assert.equal((await f.request(f.path('audio-config'), f.customer.token)).status, 200);
+  assert.equal(calls, 1);
+  assert.equal((await f.request(f.path('audio-config'), 'invalid')).status, 403);
+  const failing = await pair(t, { getIceConfig: async () => { throw new Error('private-provider-token'); } });
+  const result = await failing.request(failing.path('audio-config'), failing.customer.token);
+  assert.equal(result.status, 503); assert.equal(JSON.stringify(result).includes('private-provider-token'), false);
+  const home = await fetch(f.base);
+  assert.match(home.headers.get('permissions-policy'), /microphone=\(self\)/);
+  assert.match(home.headers.get('permissions-policy'), /camera=\(\)/);
+});
+
+test('self-hosted fonts are served as woff2, while their source folder stays private', async t => {
+  const { server } = createApp();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.shutdown());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  for (const name of ['atkinson-400', 'atkinson-700', 'newsreader']) {
+    const res = await fetch(`${base}/fonts/${name}.woff2`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'font/woff2');
+    assert.equal(Buffer.from(await res.arrayBuffer()).subarray(0, 4).toString(), 'wOF2');
+  }
+  assert.equal((await fetch(`${base}/fonts/OFL-Newsreader.txt`)).status, 404);
 });

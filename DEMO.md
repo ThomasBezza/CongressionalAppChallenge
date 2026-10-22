@@ -7,6 +7,13 @@ repeated iPhone/Safari entry, readiness, a time request received by the Mac, and
 ending on this host. The earlier phone-to-Mac Meet coexistence check used the temporary
 tunnel; audio was not repeated during this hosted check. Old tunnel links expired.
 
+## Built-in voice preview — current development
+
+Owner selected audio inside the app for all three roles. Use [VOICE.md](VOICE.md) for
+the new microphone/call workflow and verification limits. Leave Meet before testing
+native audio. The original separate-call walkthrough below remains a fallback and
+a historical record. Do not repeat its baseline merely to prove the new voice code.
+
 ## Before a run
 
 1. Open the home page on the Mac. If Render is waking, wait for the real Ordering food

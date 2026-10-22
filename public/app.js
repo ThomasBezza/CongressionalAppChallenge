@@ -1,4 +1,5 @@
 import { norms, briefs } from './content.js';
+import { VoiceCall } from './voice.js';
 
 const app = document.getElementById('app');
 const errorBox = document.getElementById('error');
@@ -13,6 +14,63 @@ let credentials = null, invitation = null, state = null, online = false, busy = 
 let controller = null, heartbeat = null, generation = 0, lastFrame = 0, ending = false;
 let joinAlias = '';
 let pendingLabel = '';
+const voicePanel = document.getElementById('voice-panel');
+const voice = new VoiceCall({
+  send: (access, name, data) => request(`/api/rooms/${access.roomId}/${name}`, data, undefined, access),
+  changed: renderVoice
+});
+const micIcon = off => `<svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>${off ? '<path d="M4 4l16 16"/>' : ''}</svg>`;
+const voiceTrouble = () => [...voice.peers.values()].filter(p => p.failed || p.pc.connectionState === 'failed').map(p => p.remote.alias);
+// Audio status for one person. No speaking indicator: a silent block is still speaking.
+function audioStatus(id) {
+  const room = voice.room || state;
+  if (!room) return '';
+  if (id === room.self?.id) return voice.stream ? voice.muted ? 'Audio: muted' : 'Audio: mic on' : voice.busy ? 'Audio: starting' : 'Not in the audio';
+  const entry = room.audio?.find(a => a.id === id);
+  if (!entry) return 'Not in the audio';
+  const peer = voice.peers.get(id);
+  if (peer && (peer.failed || peer.pc.connectionState === 'failed')) return 'Audio: can’t connect';
+  if (voice.stream && peer && peer.pc.connectionState !== 'connected') return 'Audio: connecting';
+  return entry.muted ? 'Audio: muted' : 'Audio: mic on';
+}
+function micButton() {
+  if (!voice.stream) return `<button id="voice-dock-toggle" type="button" class="mic" data-action="voice-join" aria-label="Join audio" ${voice.busy ? 'aria-disabled="true"' : ''}>${micIcon(true)}<span aria-hidden="true">${voice.busy ? 'Wait' : 'Join'}</span></button>`;
+  return `<button id="voice-dock-toggle" type="button" class="mic ${voice.muted ? '' : 'live'}" data-action="voice-mute" aria-label="Microphone" aria-pressed="${!voice.muted}" ${voice.busy ? 'aria-disabled="true"' : ''}>${micIcon(voice.muted)}<span>${voice.muted ? 'Muted' : 'Mic on'}</span></button>`;
+}
+function renderVoice() {
+  if (!voicePanel) return;
+  const focusId = document.activeElement?.closest?.('#voice-panel, #voice-dock, [data-voice-options]') ? document.activeElement.id : null;
+  const trouble = voiceTrouble();
+  const problem = trouble.length ? `The audio can’t reach ${trouble.join(' and ')} yet. Leave the audio and join it again.${voice.relay ? '' : ' If that doesn’t work, the network may be blocking direct calls.'}` : voice.message;
+  const pill = document.getElementById('voice-status');
+  if (pill) {
+    pill.hidden = !voice.room;
+    pill.textContent = !voice.stream ? voice.busy ? 'Starting audio' : 'Audio is off' : trouble.length ? 'Audio has a problem' : voice.muted ? 'Your mic is muted' : 'Your mic is on';
+    pill.className = `connection voice ${trouble.length ? 'lost' : voice.stream && !voice.muted ? 'live' : voice.stream ? 'joined' : ''}`;
+  }
+  for (const node of document.querySelectorAll('[data-audio-for]')) node.textContent = audioStatus(node.dataset.audioFor);
+  for (const node of document.querySelectorAll('[data-self-mic]')) {
+    node.textContent = !voice.stream ? '' : node.dataset.selfMic === 'paused' ? voice.muted ? '' : ' Your mic is still on.' : voice.muted ? ' Your mic is muted.' : ' Your mic is on.';
+  }
+  const slot = document.getElementById('voice-dock');
+  if (slot) slot.innerHTML = voice.room ? micButton() : '';
+  for (const node of document.querySelectorAll('[data-voice-options]')) node.innerHTML = voice.stream ? button('voice-options-leave','Leave audio','voice-leave',{independent:true,cls:'quiet'}) + '<p class="small">You’ll stay in the rehearsal after leaving the audio.</p>' : '';
+  // The full card is for setup and problems; once the attempt starts the dock holds the mic.
+  voicePanel.hidden = !voice.room || voice.room.phase !== 'prepare' && !problem && !voice.blocked;
+  if (!voicePanel.hidden) {
+    const text = problem || (!voice.stream ? 'You can talk to each other here instead of using a separate call. You’ll start muted, and nothing is recorded.'
+      : `You’re connected. ${voice.muted ? 'Your mic is muted, so tap Unmute when you want to speak.' : 'Your mic is on.'}${voice.peers.size ? '' : ' Nobody else has joined the audio yet.'}`);
+    voicePanel.innerHTML = `<h2>Room audio</h2><p role="status" class="${problem ? 'voice-alert' : ''}">${escape(text)}</p><div class="buttons">${voice.stream ? button('voice-mute',voice.muted ? 'Unmute' : 'Mute','voice-mute',{independent:true,waiting:voice.busy}) + button('voice-leave','Leave audio','voice-leave',{independent:true,cls:'quiet'}) : button('voice-join',voice.busy ? 'Opening microphone…' : 'Join audio','voice-join',{independent:true,cls:'primary',waiting:voice.busy})}${voice.busy && !voice.stream ? button('voice-cancel','Cancel','voice-cancel',{independent:true}) : ''}${voice.blocked ? button('voice-play','Tap to hear the room','voice-play',{independent:true}) : ''}</div><p class="small">${voice.stream ? 'Keep this page open. The audio may stop if you switch apps or lock your phone. If two of your devices are in the same room, use headphones so they don’t echo.' : 'Only the host and the two people practicing can join. Asking for time never mutes anyone.'}</p>`;
+  }
+  if (focusId) document.getElementById(focusId)?.focus({preventScroll:true});
+}
+function voiceAction(action) {
+  if (action === 'voice-join') voice.join();
+  if (action === 'voice-mute') voice.toggleMute();
+  if (action === 'voice-leave' || action === 'voice-cancel') voice.leave('You left the audio. You’re still in the rehearsal.');
+  if (action === 'voice-play') voice.enablePlayback();
+  return action?.startsWith('voice-');
+}
 const dockObserver = new ResizeObserver(entries => {
   const dock = entries[0]?.target;
   if (dock) document.documentElement.style.setProperty('--dock-height', `${dock.getBoundingClientRect().height}px`);
@@ -20,14 +78,15 @@ const dockObserver = new ResizeObserver(entries => {
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const roleName = role => ({ customer: 'Customer', cashier: 'Cashier', host: 'Host' }[role] || 'Waiting for admission');
 function error(message = '') { errorBox.textContent = message; errorBox.hidden = !message; }
-function button(id, text, action, { disabled = false, cls = '', pressed, ...data } = {}) {
-  return `<button id="${id}" type="button" class="${cls}" data-action="${action}" ${Object.entries(data).map(([k,v]) => `data-${k}="${escape(v)}"`).join(' ')} ${disabled || busy ? 'disabled' : ''} ${pressed === undefined ? '' : `aria-pressed="${pressed}"`}>${escape(text)}</button>`;
+// `waiting` marks a button unavailable without disabling it, so keyboard focus survives a rerender.
+function button(id, text, action, { disabled = false, waiting = false, cls = '', pressed, independent = false, ...data } = {}) {
+  return `<button id="${id}" type="button" class="${cls}" data-action="${action}" ${Object.entries(data).map(([k,v]) => `data-${k}="${escape(v)}"`).join(' ')} ${disabled || busy && !independent ? 'disabled' : ''} ${waiting ? 'aria-disabled="true"' : ''} ${pressed === undefined ? '' : `aria-pressed="${pressed}"`}>${escape(text)}</button>`;
 }
-async function request(path, data, signal) {
+async function request(path, data, signal, access = credentials) {
   if (!safeTransport) throw new Error('Open the HTTPS preview before using a room.');
   const res = await fetch(path, {
     method: data === undefined ? 'GET' : 'POST',
-    headers: { ...(path === '/api/rooms' && previewHostKey ? { 'X-Preview-Key': previewHostKey } : {}), ...(credentials ? { Authorization: `Bearer ${credentials.token}` } : {}), ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) },
+    headers: { ...(path === '/api/rooms' && previewHostKey ? { 'X-Preview-Key': previewHostKey } : {}), ...(access ? { Authorization: `Bearer ${access.token}` } : {}), ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(data === undefined ? {} : { body: JSON.stringify(data) }), signal: signal || AbortSignal.timeout(8000), cache: 'no-store'
   });
   const result = await res.json();
@@ -40,7 +99,7 @@ function apply(next) {
   const oldSummary = summary(); state = next;
   if (next.phase === 'ended') {
     stopStream(); online = false; forgetAccess();
-    connection.textContent = 'Room ended'; connection.className = 'connection';
+    connection.textContent = 'Room closed'; connection.className = 'connection';
   }
   render();
   const nextSummary = summary();
@@ -59,8 +118,9 @@ function setConnection(value, rerender = true) {
   online = value;
   if (value && wasOffline) error();
   if (!value) announcement.textContent = summary();
-  connection.textContent = value ? 'Connected · room updates live' : credentials && !stopped ? 'Reconnecting · controls unavailable' : 'Preview · room not connected';
+  connection.textContent = value ? 'Connected to the room' : credentials && !stopped ? 'Reconnecting to the room' : 'Not connected';
   connection.className = `connection ${value ? 'live' : credentials && !stopped ? 'lost' : ''}`;
+  connection.hidden = !credentials && !value;
   if (rerender) render();
 }
 function forgetAccess() {
@@ -71,6 +131,8 @@ function stopStream() {
   stopped = true; generation++; controller?.abort(); clearInterval(heartbeat); heartbeat = null;
 }
 function finishLocal(message) {
+  voice.sync(null, false, null);
+  document.body.classList.remove('taking-moment', 'listener-hold');
   forgetAccess(); pendingLabel = '';
   document.getElementById('pending').hidden = true;
   document.getElementById('pending').textContent = '';
@@ -82,7 +144,10 @@ function finishLocal(message) {
   document.documentElement.classList.remove('has-room-controls');
   dockObserver.disconnect();
   document.querySelector('.wordmark').setAttribute('href', '/');
-  app.innerHTML = `<section class="panel hero"><div class="eyebrow">Finished</div><h1>Rehearsal finished.</h1><p>${escape(message)}</p></section><section class="panel"><h2>Optional reflection</h2><p>Did you get across what you wanted? What helped, or got in the way? You can skip this.</p><p class="small">No answers or speech scores are stored.</p><a class="button" href="/">Back to home</a></section>`;
+  app.innerHTML = closedScreen(message);
+}
+function closedScreen(message) {
+  return `<section class="panel hero"><h1>This room has closed</h1><p>${escape(message)}</p><p class="small">The room’s audio has ended and your microphone is off.</p></section><section class="panel"><h2>If you’d like to think it over</h2><ul class="prompts"><li>Did you get across what you wanted to say?</li><li>What helped, and what got in the way?</li><li>What would you try differently next time?</li></ul><p class="small">These questions are just for you. Nothing here is saved.</p><a class="button" href="/">Go to the home page</a></section>`;
 }
 async function connectStream() {
   if (!safeTransport) { error('Open the HTTPS preview before using a room.'); return; }
@@ -121,7 +186,8 @@ async function connectStream() {
             const next = JSON.parse(data);
             if (next.phase !== 'ended') setConnection(true, false);
             apply(next);
-          } else if (event === 'exit' && data) { finishLocal(JSON.parse(data).message); return; }
+          } else if (event === 'audio-signal' && data) voice.receive(JSON.parse(data));
+          else if (event === 'exit' && data) { finishLocal(JSON.parse(data).message); return; }
         }
       }
     } catch (err) {
@@ -132,7 +198,7 @@ async function connectStream() {
           : state
             ? 'This room is no longer available. Ask the host for a fresh participant invitation.'
             : 'This room is no longer available. If you are hosting, return home and create a new room. Otherwise, ask your host for a fresh invitation.';
-        error(message); finishLocal(message); return;
+        error(err.status === 403 ? message : ''); finishLocal(message); return;
       }
       error(err.status === 409 ? err.message : 'Connection lost. Keep this page open to reconnect. No actions are confirmed while offline.');
     } finally { clearInterval(pulse); if (heartbeat === pulse) heartbeat = null; }
@@ -163,8 +229,12 @@ async function command(data) {
   finally { busy = false; pendingLabel = ''; render(); }
 }
 function render() {
+  voice.sync(state, online, credentials);
   // Retain local focus and disclosures when a remote event updates the screen.
   if (stopped && !state && !credentials) return;
+  const takingMoment = Boolean(online && state?.phase !== 'ended' && state?.members?.some(p => p.connected && p.moment));
+  document.body.classList.toggle('taking-moment', takingMoment);
+  document.body.classList.toggle('listener-hold', takingMoment && !state.self.moment);
   const hasControls = Boolean(credentials && state && !['waiting', 'ended'].includes(state.phase));
   document.body.classList.toggle('in-room', hasControls);
   document.documentElement.classList.toggle('has-room-controls', hasControls);
@@ -177,41 +247,55 @@ function render() {
   const openDetails = [...app.querySelectorAll('details[open]')].map(d => d.id);
   if (!credentials) {
     app.innerHTML = invitation
-      ? `<section class="intro"><div class="eyebrow">Your host invited you</div><h1>Ordering food</h1><p class="lede">One partner. An everyday conversation. Time to finish.</p></section><section class="panel entry"><h2>Join the rehearsal</h2><form id="join-form"><label for="alias">Display name</label><input id="alias" name="alias" value="${escape(joinAlias)}" autocomplete="off" maxlength="24" required placeholder="A nickname is fine"><p class="small">Your host and partner will see this name.</p><button class="primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Requesting…' : 'Ask the host to join'}</button></form><p class="small">Your host assigns the roles. Both people choose Ready before starting. Keep your existing audio call connected.</p></section>`
-      : `<section class="intro"><div class="eyebrow">Human conversation practice</div><h1>Ordering food</h1><p class="lede">Rehearse with a partner, at your own pace.</p></section><section class="entry panel"><h2>Have an invitation?</h2><p>Open the link your host shared to join your rehearsal.</p><ol class="journey"><li><strong>Join your host</strong><span>Use a nickname. Wait for your role.</span></li><li><strong>Choose your order</strong><span>You’ll see the menu before you start.</span></li><li><strong>Have the conversation</strong><span>Ask for time or pause whenever you need.</span></li></ol><p class="small">You’ll need a willing partner and an existing audio call. This preview does not find partners.</p></section><section class="hosting"><h2>Hosting a rehearsal?</h2><p>Invite two people and assign customer and cashier.</p>${requiresHostKey && !previewHostKey ? '<form id="host-key-form"><label for="host-key">Private host key</label><input id="host-key" name="hostKey" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="32" maxlength="128" required aria-describedby="host-key-help"><p class="small" id="host-key-help">Only the preview owner needs this key. Participants use their invitation instead.</p><button class="primary" type="submit" ' + (!safeTransport || busy ? 'disabled' : '') + '>Create a room</button></form>' : button('create','Create a room','create',{cls:'primary',disabled:!safeTransport})}</section>`;
+      ? `<section class="intro"><h1>You’re invited to practice ordering at a café</h1><p class="lede">You’ll practice with one partner while a host keeps things running. You can ask for more time, pause, or leave whenever you want.</p></section><section class="panel entry"><form id="join-form"><label for="alias">What name should the others see?</label><input id="alias" name="alias" value="${escape(joinAlias)}" autocomplete="off" maxlength="24" required placeholder="A nickname is fine"><button class="primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Asking…' : 'Ask to join'}</button></form><p class="small">Once your host lets you in, you can join the room’s audio. Your browser will ask to use your microphone, and you’ll start muted. Nothing is recorded.</p></section>`
+      : `<section class="intro"><h1>Practice ordering food with a partner</h1><p class="lede">One of you orders and the other takes the order. Either of you can ask for more time, and the other person waits until you’re ready to go on.</p></section><section class="entry panel"><h2>Joining someone’s room?</h2><p>Open the invitation link your host sent you. From there:</p><ol class="journey"><li><strong>Choose a name</strong><span>A nickname is fine. Your host lets you in and tells you whether you’re ordering or taking the order.</span></li><li><strong>Look over the menu</strong><span>You’ll see it before the conversation starts, and it stays on screen the whole time.</span></li><li><strong>Talk it through</strong><span>Tap Give me a moment whenever you need more time.</span></li></ol><p class="small">You’ll need a host and a partner who has agreed to practice. This preview doesn’t match you with partners.</p></section><section class="hosting"><h2>Hosting a rehearsal?</h2><p>Create a room, invite two people, and choose who orders and who takes the order.</p>${requiresHostKey && !previewHostKey ? '<form id="host-key-form"><label for="host-key">Private host key</label><input id="host-key" name="hostKey" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="32" maxlength="128" required aria-describedby="host-key-help"><p class="small" id="host-key-help">Only the preview owner needs this key. Participants use their invitation instead.</p><button class="primary" type="submit" ' + (!safeTransport || busy ? 'disabled' : '') + '>Create a room</button></form>' : button('create','Create a room','create',{cls:'primary',disabled:!safeTransport})}</section>`;
   } else if (!state) {
-    app.innerHTML = '<section class="panel hero"><h1>Opening the room…</h1><p>Checking your link and connecting to the live state.</p></section>';
+    app.innerHTML = '<section class="panel hero"><h1>Opening the room</h1><p>Checking your link and connecting.</p></section>';
   } else if (state.phase === 'ended') {
-    app.innerHTML = `<section class="panel hero"><h1>Room ended.</h1><p>${escape(state.notice)}</p></section><section class="panel"><h2>Optional reflection</h2><p>Did you communicate what you wanted? You can skip this; no answer is saved.</p><a class="button" href="/">Back to home</a></section>`;
+    app.innerHTML = closedScreen(state.notice);
   } else if (state.phase === 'waiting') {
-    app.innerHTML = `<section class="panel hero"><div class="eyebrow">${escape(state.self.alias)}</div><h1>Waiting for your host.</h1><p>Your request is pending. You are not paired with anyone yet.</p><p class="small">Host ${state.hostConnected ? 'connected' : 'not connected'}.</p></section><section class="panel"><h2>How this works</h2><p>The host assigns two roles. Both people choose Ready before starting.</p><p>${escape(norms)}</p></section>${button('leave','Cancel request','leave',{cls:'quiet',disabled:!online})}`;
+    app.innerHTML = `<section class="panel hero"><h1>Waiting for your host</h1><p>You’ve asked to join as ${escape(state.self.alias)}. Your host will let you in and tell you which role you have.</p><p class="small">${state.hostConnected ? 'Your host is connected.' : 'Your host isn’t connected right now.'}</p></section><section class="panel"><h2>How the practice works</h2><p>One person orders and the other takes the order. Once you’re both ready, the host starts the conversation.</p><p>${escape(norms)}</p></section>${button('leave','Cancel request','leave',{cls:'quiet',disabled:!online})}`;
   } else {
     const isHost = state.self.role === 'host';
     const pair = state.members || [], holds = online ? pair.filter(p => p.connected && p.moment) : [];
     const canStart = online && state.hostConnected && pair.length === 2 && pair.every(p => p.connected && p.ready && !p.moment && !p.paused);
-    const headline = holds.length ? holds.map(p => p.id === state.self.id ? 'You need a moment' : `${p.alias} needs a moment`).join('. ') : {prepare:'Get ready to try.',active:'Your conversation.',paused:'Take a pause.'}[state.phase];
-    let controls = '';
+    const headline = holds.length ? holds.map(p => p.id === state.self.id ? 'You’re taking a moment' : `${p.alias} is taking a moment`).join('. ') : {prepare:'Get ready to try.',active:'Your conversation.',paused:'Take a pause.'}[state.phase];
+    // One primary action sits beside the microphone; anything else is a smaller second row.
+    let primary = '', secondary = '';
+    const momentButton = cls => button('moment-control',!online ? 'Waiting to reconnect' : state.self.moment ? 'I’m ready to go on' : 'Give me a moment','moment',{cls,pressed:online && state.self.moment,disabled:!online,value:!state.self.moment});
+    const readyButton = cls => button('ready-control',state.self.ready ? 'Not ready yet' : 'I’m ready','ready',{cls,pressed:online && state.self.ready,disabled:!online || state.self.moment,value:!state.self.ready});
     if (isHost) {
-      if (state.phase === 'prepare' || state.phase === 'paused') controls += button('start',state.phase === 'paused' ? 'Resume when both are ready' : 'Start when both are ready','start',{cls:'primary',disabled:!canStart});
-      if (state.phase === 'active') controls += button('pause','Pause conversation','pause',{disabled:!online});
+      if (state.phase === 'prepare' || state.phase === 'paused') primary = button('start',state.phase === 'paused' ? 'Resume' : 'Start','start',{cls:'primary',disabled:!canStart});
+      if (state.phase === 'active') primary = button('pause','Pause','pause',{disabled:!online});
+    } else if (state.phase === 'active') {
+      primary = momentButton('signal'); secondary = button('pause','Pause','pause',{disabled:!online});
+    } else if (state.self.moment) {
+      primary = momentButton('signal'); secondary = readyButton('');
     } else {
-      if (state.phase !== 'prepare' || state.self.moment) controls += button('moment-control',!online ? 'Waiting to reconnect' : state.self.moment ? 'Clear my time request' : 'Give me a moment','moment',{cls:'signal',pressed:online && state.self.moment,disabled:!online,value:!state.self.moment});
-      if (state.phase === 'prepare' || state.phase === 'paused') controls += button('ready-control',state.self.ready ? 'Not ready yet' : state.phase === 'prepare' && state.attempt === 1 ? 'Ready to begin' : 'Ready to continue','ready',{cls:'primary',pressed:online && state.self.ready,disabled:!online || state.self.moment,value:!state.self.ready});
-      if (state.phase === 'active') controls += button('pause','Pause conversation','pause',{disabled:!online});
+      primary = readyButton('primary'); if (state.phase === 'paused') secondary = momentButton('');
     }
-    const retry = state.phase !== 'prepare' ? button('retry','Request another attempt','retry',{disabled:!online || !state.hostConnected || pair.length !== 2 || pair.some(p => !p.connected)}) : '';
-    app.innerHTML = `<section class="room-heading ${holds.length ? 'needs-time' : ''}"><div class="eyebrow">${escape(roleName(state.self.role))} / attempt ${state.attempt} / ${!online ? 'Last known state' : escape({prepare:'Preparation',active:'In conversation',paused:'Paused'}[state.phase])}</div><h1>${escape(!online ? 'Reconnecting…' : holds.length ? headline : state.phase === 'active' ? 'Ordering food' : headline)}</h1><p>${!online ? 'Waiting for live room state. Your requests are not confirmed while offline.' : holds.length ? holds.some(p => p.id === state.self.id) ? 'Your request stays visible until you clear it. Let others finish, too.' : 'Give them time. They will clear their own request.' : escape(state.notice)}</p></section>
+    const hint = isHost ? state.phase === 'active' ? '' : canStart ? 'Both people are ready.' : 'You can start once both people have tapped I’m ready.'
+      : state.self.moment ? state.phase === 'paused' ? 'This clears your time request. It doesn’t restart the paused conversation.' : ''
+      : state.phase === 'active' ? 'Asking for time keeps your turn and leaves your microphone as it is.' : state.phase === 'paused' ? 'The host can continue once you’ve both tapped I’m ready.' : 'The host can start once you’ve both tapped I’m ready.';
+    const others = holds.filter(p => p.id !== state.self.id);
+    const stillSpeaking = others.some(p => state.audio?.some(a => a.id === p.id && !a.muted));
+    const retry = state.phase !== 'prepare' ? button('retry','Ask to try again from the start','retry',{disabled:!online || !state.hostConnected || pair.length !== 2 || pair.some(p => !p.connected)}) : '';
+    app.innerHTML = `<section class="room-heading ${holds.length ? 'needs-time' : ''}"><h1>${escape(!online ? 'Reconnecting to the room' : holds.length ? headline : state.phase === 'paused' ? 'The conversation is paused' : isHost ? state.phase === 'active' ? 'The conversation has started' : 'Set up the room' : state.phase === 'active' ? 'Ordering at the café' : `You’re the ${roleName(state.self.role).toLowerCase()}`)}</h1><p>${!online ? 'Your taps won’t reach the others until the connection comes back.' : holds.some(p => p.id === state.self.id) ? 'Take as long as you need. The others have been asked to wait. Tap I’m ready to go on when you want to continue.<span data-self-mic="moment"></span>' : holds.length ? `Please wait and let them finish. They’ll tap to continue when they’re ready.${stillSpeaking ? ' Their microphone is on, so they may still be talking.' : ''}` : state.phase === 'paused' ? `Nobody is being rushed. You’ll both tap I’m ready before the host continues.<span data-self-mic="paused"></span>` : isHost ? state.phase === 'active' ? 'Let them talk without stepping in. You can pause if either of them needs it.' : 'Invite two people, let them in, and start once they’re both ready.' : state.phase === 'active' ? `You’re the ${roleName(state.self.role).toLowerCase()}. The menu is below if you need it.` : state.self.role === 'customer' ? 'Decide what you’d like from the menu below. When the conversation starts, ask for it, answer any questions, and correct anything that comes back wrong.' : 'Greet the customer and ask what they’d like. Ask about anything they leave out, like the size, then read the order back so they can correct it.'}</p></section>
       ${isHost ? hostPanel(state) : ''}
-      ${state.phase !== 'active' ? `<section class="brief"><h2>Your role: ${escape(roleName(state.self.role))}</h2><p>${escape(briefs[state.self.role])}</p></section>` : ''}
-      <section class="menu-sheet" aria-labelledby="menu-title"><div class="menu-caption"><span>Practice menu</span><span>01</span></div><h2 id="menu-title">Tea &amp; coffee</h2><dl class="menu-options"><div><dt>Drink</dt><dd>Iced tea or coffee</dd></div><div><dt>Size</dt><dd>Small or large</dd></div><div><dt>Ice</dt><dd>With or without</dd></div><div><dt>Service</dt><dd>For here or takeaway</dd></div></dl><p class="small">Fictional menu. Keep your order in your own notes.</p></section>
-      <section class="people"><h2>${online ? 'In the room' : 'Last known participants'}</h2><p class="small">Host ${state.hostConnected ? 'connected' : 'disconnected — wait to continue'}.</p><ul class="pair">${pair.map(p => `<li><strong>${escape(p.alias)}<span class="role-name">${escape(roleName(p.role))}</span></strong><span>${!p.connected ? 'Disconnected' : p.moment ? 'Needs a moment' : p.ready ? 'Ready' : state.phase === 'active' ? 'Connected' : 'Not ready yet'}</span>${isHost && !p.connected ? button(`remove-${p.id}`,'Release disconnected seat','remove',{member:p.id,disabled:!online || state.phase==='active'}) : ''}</li>`).join('') || '<li>Waiting for the host to admit a pair.</li>'}</ul></section>
-      <details class="room-details" id="guidance"><summary>Role &amp; listening guide</summary>${state.phase === 'active' ? `<h2>Your role: ${escape(roleName(state.self.role))}</h2><p>${escape(briefs[state.self.role])}</p>` : ''}<p>${escape(norms)}</p></details>
-      <details class="room-details" id="session-options"><summary>Session options</summary>${retry}<p class="small">Room closes at ${escape(new Date(state.expiresAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))} in your current time zone.</p>
+      <div id="voice-panel-slot"></div>
+      <section class="menu-sheet" aria-labelledby="menu-title"><h2 id="menu-title">Tea &amp; Coffee</h2><dl class="menu-options"><div><dt>Drink</dt><dd>Iced tea or coffee</dd></div><div><dt>Size</dt><dd>Small or large</dd></div><div><dt>Ice</dt><dd>With or without</dd></div><div><dt>To have it</dt><dd>Here or to go</dd></div></dl><p class="menu-note">This café is made up for practice. Keep your order in your head or on your own paper.</p></section>
+      <section class="people"><h2>${online ? 'Who’s here' : 'Who was here before the connection dropped'}</h2><p class="small">${isHost ? 'You’re the host.' : state.hostConnected ? 'The host is here.' : 'The host has disconnected. Wait for them to come back.'} <span data-audio-for="host"></span></p><ul class="pair">${pair.map(p => `<li><span class="person-initial" aria-hidden="true">${escape([...p.alias][0]?.toLocaleUpperCase())}</span><strong>${escape(p.id === state.self.id ? p.alias + ' (you)' : p.alias)}<span class="role-name">${escape(roleName(p.role))}</span></strong><span class="person-state ${p.moment ? 'moment' : ''}">${!p.connected ? 'Disconnected' : p.moment ? 'Taking a moment' : p.ready ? 'Ready' : state.phase === 'active' ? 'Here' : 'Getting ready'}</span><span class="audio-line" data-audio-for="${escape(p.id)}"></span>${isHost && !p.connected ? button(`remove-${p.id}`,'Release disconnected seat','remove',{member:p.id,disabled:!online || state.phase==='active'}) : ''}</li>`).join('') || '<li>Nobody has been let in yet.</li>'}</ul></section>
+      <details class="room-details" id="guidance"><summary>Your role and how to listen</summary><p>${escape(briefs[state.self.role])}</p><p>${escape(norms)}</p></details>
+      <details class="room-details" id="session-options"><summary>More options</summary><div data-voice-options></div>${retry}<p class="small">This is attempt ${state.attempt}. The room closes at ${escape(new Date(state.expiresAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))}.</p>
       <div class="end-row">${isHost ? (ending ? `<p>End this room for everyone? It cannot be reopened.</p><div class="buttons">${button('end-confirm','End room for everyone','end',{cls:'danger',disabled:!online})}${button('cancel-end','Keep room open','cancel-end')}</div>` : button('end-prompt','End room','end-prompt',{cls:'danger',disabled:!online})) : button('leave','Leave room','leave',{cls:'quiet',disabled:!online})}</div></details>
-      <section class="control-dock" aria-label="Conversation controls">${!online || holds.length ? `<p class="dock-status ${!online ? 'offline' : 'needs-time'}">${!online ? 'Reconnecting · requests unconfirmed' : escape(holds.map(p => p.id === state.self.id ? 'You asked for a moment' : `${p.alias} needs a moment`).join('. '))}</p>` : ''}<div class="buttons">${controls}</div>${!isHost ? `<p class="dock-hint">${state.phase === 'active' ? 'A time request asks everyone to wait until you clear it.' : 'Both people choose Ready before the host can start.'}</p>` : ''}</section>`;
+      <section class="control-dock" aria-label="Conversation controls">${!online || holds.length ? `<p class="dock-status ${!online ? 'offline' : 'needs-time'}">${!online ? 'Reconnecting. Your taps won’t reach the others yet.' : escape(holds.map(p => p.id === state.self.id ? 'You’re taking a moment' : `${p.alias} is taking a moment`).join('. '))}</p>` : ''}<div class="dock-main"><div id="voice-dock" class="mic-slot"></div>${primary}</div>${secondary ? `<div class="dock-secondary">${secondary}</div>` : ''}${hint ? `<p class="dock-hint">${hint}</p>` : ''}</section>`;
   }
+  // The audio card moves into the room layout; its node (not its media) survives rerenders.
+  const voiceSlot = document.getElementById('voice-panel-slot');
+  if (voiceSlot) voiceSlot.replaceWith(voicePanel);
+  else if (voicePanel.parentElement !== app.parentElement) app.before(voicePanel);
   if (credentials && state && state.phase !== 'ended' && !online) {
-    app.insertAdjacentHTML('beforeend', `<div class="end-row">${button('close-offline','Close this view','close-offline',{cls:'quiet'})}<p class="small">The room cannot confirm a leave while offline. The host will see a disconnection.</p></div>`);
+    app.insertAdjacentHTML('beforeend', `<div class="end-row">${button('close-offline','Close this view','close-offline',{cls:'quiet'})}<p class="small">While you’re offline the room can’t confirm that you left, so the host will see you as disconnected.</p></div>`);
   }
   dockObserver.disconnect();
   const dock = app.querySelector('.control-dock');
@@ -220,11 +304,12 @@ function render() {
     dockObserver.observe(dock);
   }
   for (const id of openDetails) { const node = document.getElementById(id); if (node) node.open = true; }
+  renderVoice();
   if (focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
 }
 function hostPanel(room) {
   const url = `${publicPreviewOrigin || location.origin}/#join=${room.roomId}.${room.invite}`;
-  return `<section class="panel"><h2>Invite the pair</h2><p class="small">Share this invitation through your group’s existing channel. Keep this host tab for yourself.</p><label class="sr-only" for="invite-link">Participant invitation</label><input class="invite" id="invite-link" readonly value="${escape(url)}">${button('copy','Copy participant invitation','copy')}<h3>Waiting requests</h3>${room.waiting.length ? room.waiting.map(p => `<div class="waiting-card"><strong>${escape(p.alias)}</strong><p class="small">${p.connected ? 'Connected · awaiting admission' : 'Disconnected · wait before admitting'}</p><div class="buttons">${button(`admit-customer-${p.id}`,'Customer','admit',{member:p.id,role:'customer',disabled:!online || !p.connected || room.members.some(m=>m.role==='customer') || room.phase==='active'})}${button(`admit-cashier-${p.id}`,'Cashier','admit',{member:p.id,role:'cashier',disabled:!online || !p.connected || room.members.some(m=>m.role==='cashier') || room.phase==='active'})}${button(`decline-${p.id}`,'Decline','decline',{member:p.id,disabled:!online})}</div></div>`).join('') : '<p class="small">No requests yet. Share the invitation to bring people in.</p>'}</section>`;
+  return `<section class="panel"><h2>Invite two people</h2><p class="small">Send this link to the two people practicing, by text or however your group usually talks. Keep this tab open; it’s your host view.</p><label class="sr-only" for="invite-link">Invitation link</label><input class="invite" id="invite-link" readonly value="${escape(url)}">${button('copy','Copy invitation link','copy')}<h3>Waiting to join</h3>${room.waiting.length ? room.waiting.map(p => `<div class="waiting-card"><strong>${escape(p.alias)}</strong><p class="small">${p.connected ? 'Waiting for you to let them in.' : 'Disconnected. Wait for them to reconnect.'}</p><div class="buttons">${button(`admit-customer-${p.id}`,'Let in as customer','admit',{member:p.id,role:'customer',disabled:!online || !p.connected || room.members.some(m=>m.role==='customer') || room.phase==='active'})}${button(`admit-cashier-${p.id}`,'Let in as cashier','admit',{member:p.id,role:'cashier',disabled:!online || !p.connected || room.members.some(m=>m.role==='cashier') || room.phase==='active'})}${button(`decline-${p.id}`,'Decline','decline',{member:p.id,disabled:!online})}</div></div>`).join('') : '<p class="small">Nobody has asked to join yet.</p>'}</section>`;
 }
 async function createRoom() {
   busy = true; error(); render();
@@ -256,14 +341,15 @@ app.addEventListener('submit', async event => {
   finally { busy = false; render(); }
 });
 app.addEventListener('click', async event => {
-  const node = event.target.closest('button[data-action]'); if (!node || node.disabled) return;
+  const node = event.target.closest('button[data-action]'); if (!node || node.disabled || node.getAttribute('aria-disabled') === 'true') return;
   const action = node.dataset.action;
+  if (voiceAction(action)) return;
   if (action === 'close-offline') { finishLocal('You closed this view while offline. Your leave could not be confirmed; the host will see your disconnection.'); return; }
   if (action === 'create') {
     await createRoom();
   } else if (action === 'copy') {
     const input = document.getElementById('invite-link');
-    try { await navigator.clipboard.writeText(input.value); announcement.textContent = 'Participant invitation copied.'; }
+    try { await navigator.clipboard.writeText(input.value); announcement.textContent = 'Invitation link copied.'; }
     catch { input.focus(); input.select(); error('Copy the selected participant invitation manually.'); }
   } else if (action === 'end-prompt' || action === 'cancel-end') { ending = action === 'end-prompt'; render(); }
   else {
@@ -275,6 +361,7 @@ app.addEventListener('click', async event => {
   }
 });
 window.addEventListener('pagehide', () => {
+  voice.leave('', false);
   // Closing a stream triggers a server-side pause; presence leases cover abrupt loss.
   stopStream();
 });

@@ -53,8 +53,8 @@ Publish only runnable source, tests, runtime configuration and these operating i
 Keep research, owner conversations, PROJECT.md, HANDOFF.md and EVIDENCE.md local.
 The hosted source is a deployment snapshot; local project history remains authoritative.
 For an update, use an app-only clone and copy the same allowed paths: .gitignore,
-.node-version, render.yaml, server.mjs, dev, app/rooms.mjs, the four public/ files,
-test/rooms.test.mjs, scripts/check-hosted.mjs, HOSTING.md and DEMO.md, plus the public
+.node-version, render.yaml, server.mjs, dev, app/rooms.mjs, app/voice-config.mjs, the five public/ files, public/fonts/ (three woff2 files plus their OFL licenses),
+test/rooms.test.mjs, test/voice.test.mjs, scripts/check-hosted.mjs, HOSTING.md, DEMO.md and VOICE.md, plus the public
 repository's concise README. Commit/push normally from that clone. Never push this local
 project's full history to the public remote or force-push over unknown remote changes.
 The first live app snapshot is `74d69f47a293c4b6c8292c38438ddc9377750bc5`.
@@ -111,3 +111,6 @@ A checker-detected key in public HTML now reports exposure explicitly and advise
 rotation without printing its value. Known waiting participants get the same fresh-
 invitation recovery guidance as admitted participants; unknown refreshed tabs retain
 neutral host/participant guidance.
+
+Built-in voice preview: see [VOICE.md](VOICE.md) for direct STUN mode and optional
+server-side TURN configuration. No relay account or paid usage has been enabled.

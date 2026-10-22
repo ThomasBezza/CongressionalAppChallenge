@@ -4,27 +4,33 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import { Rooms, RoomError } from './app/rooms.mjs';
+import { iceProvider } from './app/voice-config.mjs';
 
 const files = new Map([
   ['/', ['public/index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['public/app.js', 'text/javascript; charset=utf-8']],
   ['/styles.css', ['public/styles.css', 'text/css; charset=utf-8']],
-  ['/content.js', ['public/content.js', 'text/javascript; charset=utf-8']]
+  ['/content.js', ['public/content.js', 'text/javascript; charset=utf-8']],
+  ['/voice.js', ['public/voice.js', 'text/javascript; charset=utf-8']],
+  // Self-hosted OFL fonts; the content security policy allows no third-party font hosts.
+  ['/fonts/atkinson-400.woff2', ['public/fonts/atkinson-400.woff2', 'font/woff2']],
+  ['/fonts/atkinson-700.woff2', ['public/fonts/atkinson-700.woff2', 'font/woff2']],
+  ['/fonts/newsreader.woff2', ['public/fonts/newsreader.woff2', 'font/woff2']]
 ]);
 const headers = {
   'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
   'X-Robots-Tag': 'noindex, nofollow',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  'Permissions-Policy': 'camera=(), microphone=(self), geolocation=()'
 };
-async function body(req) {
+async function body(req, limit = 4096) {
   if (!(req.headers['content-type'] || '').startsWith('application/json')) throw new RoomError(415, 'Send a JSON request.');
   const text = await new Promise((resolve, reject) => {
     const chunks = []; let size = 0; let tooLarge = false;
     req.on('data', chunk => {
       if (tooLarge) return;
       size += chunk.length;
-      if (size > 4096) { tooLarge = true; reject(new RoomError(413, 'This request is too large.')); return; }
+      if (size > limit) { tooLarge = true; reject(new RoomError(413, 'This request is too large.')); return; }
       chunks.push(chunk);
     });
     req.on('end', () => { if (!tooLarge) resolve(Buffer.concat(chunks).toString('utf8')); });
@@ -39,7 +45,7 @@ async function body(req) {
 const json = (res, status, data) => {
   res.writeHead(status, { ...headers, 'Content-Type': 'application/json' }); res.end(JSON.stringify(data));
 };
-export function createApp({ rooms = new Rooms(), sweepMs = 1000, pingMs = 5000, disconnectGraceMs = 3000, allowedHosts = ['127.0.0.1', 'localhost'], creationSecret = null, previewOrigin = null, hosted = false } = {}) {
+export function createApp({ rooms = new Rooms(), sweepMs = 1000, pingMs = 5000, disconnectGraceMs = 3000, allowedHosts = ['127.0.0.1', 'localhost'], creationSecret = null, previewOrigin = null, hosted = false, getIceConfig = iceProvider() } = {}) {
   const hosts = new Set(allowedHosts);
   const streams = new Set();
   const disconnects = new Map();
@@ -88,7 +94,7 @@ export function createApp({ rooms = new Rooms(), sweepMs = 1000, pingMs = 5000, 
         }
         await body(req); json(res, 201, rooms.create()); return;
       }
-      const match = url.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{32})\/(join|state|events|action|heartbeat)$/);
+      const match = url.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{32})\/(join|state|events|action|heartbeat|audio|audio-signal|audio-config)$/);
       if (!match) throw new RoomError(404, 'Page not found. Open the app home page or your room invitation.');
       const room = rooms.get(match[1]); const endpoint = match[2];
       if (req.method === 'POST' && endpoint === 'join') {
@@ -96,6 +102,24 @@ export function createApp({ rooms = new Rooms(), sweepMs = 1000, pingMs = 5000, 
       }
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
       rooms.actor(room, token);
+      if (req.method === 'GET' && endpoint === 'audio-config') {
+        const actor = rooms.audioActor(room, token);
+        if (!actor.iceConfig) {
+          actor.iceConfig = getIceConfig();
+          actor.iceConfig.catch(() => { setTimeout(() => { actor.iceConfig = null; }, 5000).unref(); });
+        }
+        try { json(res, 200, await actor.iceConfig); }
+        catch { throw new RoomError(503, 'Audio relay setup is unavailable. You can keep using rehearsal controls and try audio again shortly.'); }
+        return;
+      }
+      if (req.method === 'POST' && endpoint === 'audio') {
+        json(res, 200, rooms.audioCommand(room, token, await body(req))); return;
+      }
+      if (req.method === 'POST' && endpoint === 'audio-signal') {
+        const { targetToken, signal } = rooms.audioSignal(room, token, await body(req, 20000));
+        for (const stream of streams) if (stream.room === room && stream.token === targetToken) send(stream, 'audio-signal', signal);
+        json(res, 200, { ok: true }); return;
+      }
       if (req.method === 'GET' && endpoint === 'state') { json(res, 200, rooms.view(room, token)); return; }
       if (req.method === 'POST' && endpoint === 'heartbeat') {
         rooms.heartbeat(room, token); json(res, 200, { ok: true }); return;

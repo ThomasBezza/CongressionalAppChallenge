@@ -112,7 +112,7 @@ function summary() {
   if (credentials && !online) return 'Reconnecting. Waiting for confirmed room state.';
   if (!state) return '';
   const holds = state.members?.filter(p => p.connected && p.moment).map(p => p.alias) || [];
-  if (holds.length) return `${holds.join(' and ')} ${holds.length === 1 ? 'needs' : 'need'} a moment.`;
+  if (holds.length) return `${holds.join(' and ')} ${holds.length === 1 ? 'needs' : 'need'} a moment.${momentTicketNote() ? ` ${momentTicketNote()}` : ''}`;
   const phase = { waiting:'Waiting for the host.', prepare:'Prepare for the conversation.', active:'Conversation is active.', paused:'Conversation paused. Check readiness before resuming.', ended:'This room has ended.' }[state.phase] || '';
   return state.ticket ? `${phase} ${ticketStatus(state.ticket, state.self.role)}` : phase;
 }
@@ -236,8 +236,15 @@ async function command(data) {
 function ticketStatus(ticket, role) {
   if (ticket.response === 'confirmed') return role === 'customer' ? 'You confirmed: that’s what you wanted.' : 'The customer confirmed: that’s what they wanted.';
   if (ticket.response === 'correction') return role === 'customer' ? 'Talk through what you’d like changed.' : 'The customer would like a change. Ask them what to change.';
-  if (ticket.response === 'skipped') return role === 'customer' ? `${ticket.edition > 1 ? 'The cashier updated the ticket. ' : ''}You skipped the review. You can keep talking.` : 'The customer skipped the ticket review. You can keep talking.';
+  if (ticket.response === 'skipped') return role === 'customer' ? ticket.edition > 1 ? 'The cashier updated the ticket.' : 'You skipped the ticket review.' : 'The customer skipped the ticket review. You can keep talking.';
   return role === 'customer' ? ticket.revealed ? 'Check what the cashier understood. You can confirm or ask for a change.' : ticket.edition > 1 ? 'The cashier updated the ticket. You can review the changes or skip them.' : 'The cashier shared a ticket. You can review it or skip it.' : ticket.revealed ? 'The customer is reviewing the ticket.' : 'The ticket is shared. Reviewing it is the customer’s choice.';
+}
+// While the customer takes a moment, ticket news lives in the pinned dock and its details stay hidden.
+function momentTicketNote() {
+  const ticket = state?.ticket;
+  if (state?.self?.role !== 'customer' || !state.self.moment || !ticket) return '';
+  if (!ticket.revealed) return `${ticket.edition > 1 ? 'The cashier updated the ticket.' : 'Your cashier sent a ticket.'} You can review it after you tap I’m ready to go on.`;
+  return ticket.response === 'confirmed' ? '' : 'The cashier’s ticket will be here after you tap I’m ready to go on.';
 }
 function ticketPanel() {
   if (!['active', 'paused'].includes(state.phase)) { ticketDraft = null; ticketContext = ''; return ''; }
@@ -255,12 +262,16 @@ function ticketPanel() {
     return `<section class="ticket-sheet" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">Write the order ticket</h2><p id="ticket-choice-help">Choose what you understood. Tap a selected choice again to leave it unanswered.</p>${status}${stale ? `<p class="voice-alert">The shared ticket changed in another view. Load it before editing again.</p>${button('ticket-reload', 'Load the shared ticket', 'ticket-reload')}` : ''}<form id="ticket-form"><div class="ticket-fields">${ticketFields.map(f => `<fieldset aria-describedby="ticket-choice-help"><legend>${escape(f.label)}</legend><div class="ticket-choices">${f.options.map((value, i) => button(`ticket-${f.name}-${i}`, value, 'ticket-choice', { pressed: ticketDraft.fields[f.name] === value, disabled: !online || stale, waiting: busy, independent: true, field: f.name, choice: value })).join('')}</div></fieldset>`).join('')}</div><button id="ticket-share" class="primary" type="submit" ${busy ? 'aria-disabled="true"' : ''} ${!online || stale || !Object.values(ticketDraft.fields).some(Boolean) ? 'disabled' : ''}>${busy ? 'Sharing…' : ticket ? 'Share revised ticket' : 'Share ticket'}</button></form><p class="small">Unshared edits stay in this tab. Sharing offers an optional review; it doesn’t end the conversation. The ticket disappears when you retry or the room closes.</p></section>`;
   }
   if (!ticket) return '';
-  if (state.self.moment) return `<section class="panel ticket-later" aria-label="Order ticket"><p class="small">${ticket.edition > 1 ? 'The cashier updated the ticket for later.' : 'The cashier shared a ticket for later.'} It can wait until you’re ready to go on.</p></section>`;
-  const details = ticket.revealed ? `<dl class="menu-options">${ticketFields.map(f => `<div><dt>${escape(f.label)}</dt><dd>${escape(ticket.fields[f.name] || 'Not heard yet')}</dd></div>`).join('')}</dl><p class="small">This is what the cashier understood. You can clarify anything, including an unanswered detail.</p>` : '';
-  const controls = !ticket.revealed
-    ? `${action('ticket-review', ticket.response === 'skipped' ? 'Review the ticket after all' : 'Review the ticket', 'ticket-review', ticket.response === 'skipped' ? 'quiet' : 'primary')}${ticket.response !== 'skipped' ? action('ticket-skip', 'Skip review', 'ticket-skip', 'quiet') : ''}`
-    : `${ticket.response !== 'confirmed' ? action('ticket-confirm', 'That’s what I wanted', 'ticket-confirm', 'primary') : ''}${ticket.response !== 'correction' ? action('ticket-correction', 'I’d like a change', 'ticket-correction') : ''}${action('ticket-skip', 'Skip review', 'ticket-skip', 'quiet')}`;
-  return `<section class="${ticket.revealed ? 'ticket-sheet' : 'panel ticket-offer'}" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">${ticket.revealed ? 'The cashier’s ticket' : ticket.response === 'skipped' ? 'Order ticket' : ticket.edition > 1 ? 'The cashier updated the ticket' : 'Your cashier has a ticket ready'}</h2>${status}${details}<div class="buttons">${controls}</div>${ticket.revealed ? '<p class="small">Reviewing is optional. Nothing is scored or saved after the room closes.</p>' : ''}</section>`;
+  if (state.self.moment) return '';
+  if (!ticket.revealed) {
+    // Unopened ticket: the heading carries the news; a skip stays in effect, so review is offered without a prompt.
+    const skipped = ticket.response === 'skipped', updated = ticket.edition > 1;
+    const offer = skipped ? '' : `<p>${updated ? 'You can review the changes or skip them.' : 'You can review it or skip it.'}</p>`;
+    return `<section class="ticket-offer" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">${updated ? 'The cashier updated the ticket' : skipped ? 'Order ticket' : 'Your cashier has a ticket ready'}</h2>${offer}<div class="buttons">${action('ticket-review', 'Review ticket', 'ticket-review', skipped ? '' : 'primary')}${skipped ? '' : action('ticket-skip', 'Skip review', 'ticket-skip', 'quiet')}</div></section>`;
+  }
+  const details = `<dl class="menu-options">${ticketFields.map(f => `<div><dt>${escape(f.label)}</dt><dd>${escape(ticket.fields[f.name] || 'Not heard yet')}</dd></div>`).join('')}</dl><p class="small">This is what the cashier understood. You can clarify anything, including an unanswered detail.</p>`;
+  const controls = `${ticket.response !== 'confirmed' ? action('ticket-confirm', 'That’s what I wanted', 'ticket-confirm', 'primary') : ''}${ticket.response !== 'correction' ? action('ticket-correction', 'I’d like a change', 'ticket-correction') : ''}${action('ticket-skip', 'Skip review', 'ticket-skip', 'quiet')}`;
+  return `<section class="ticket-sheet" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">The cashier’s ticket</h2>${status}${details}<div class="buttons">${controls}</div><p class="small">Reviewing is optional. Nothing is scored or saved after the room closes.</p></section>`;
 }
 function render() {
   voice.sync(state, online, credentials);
@@ -323,7 +334,7 @@ function render() {
       <details class="room-details" id="guidance"><summary>Your role and how to listen</summary><p>${escape(briefs[state.self.role])}</p><p>${escape(norms)}</p></details>
       <details class="room-details" id="session-options"><summary>More options</summary><div data-voice-options></div>${retry}<p class="small">This is attempt ${state.attempt}. The room closes at ${escape(new Date(state.expiresAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))}.</p>
       <div class="end-row">${isHost ? (ending ? `<p>End this room for everyone? It cannot be reopened.</p><div class="buttons">${button('end-confirm','End room for everyone','end',{cls:'danger',disabled:!online})}${button('cancel-end','Keep room open','cancel-end')}</div>` : button('end-prompt','End room','end-prompt',{cls:'danger',disabled:!online})) : button('leave','Leave room','leave',{cls:'quiet',disabled:!online})}</div></details>
-      <section class="control-dock" aria-label="Conversation controls">${!online || holds.length ? `<p class="dock-status ${!online ? 'offline' : 'needs-time'}">${!online ? 'Reconnecting. Your taps won’t reach the others yet.' : escape(holds.map(p => p.id === state.self.id ? 'You’re taking a moment' : `${p.alias} is taking a moment`).join('. '))}</p>` : ''}<div class="dock-main"><div id="voice-dock" class="mic-slot"></div>${primary}</div>${secondary ? `<div class="dock-secondary">${secondary}</div>` : ''}${hint ? `<p class="dock-hint">${hint}</p>` : ''}</section>`;
+      <section class="control-dock" aria-label="Conversation controls">${!online || holds.length ? `<div class="dock-status ${!online ? 'offline' : 'needs-time'}"><p>${!online ? 'Reconnecting. Your taps won’t reach the others yet.' : escape(holds.map(p => p.id === state.self.id ? 'You’re taking a moment' : `${p.alias} is taking a moment`).join('. '))}</p>${online && momentTicketNote() ? `<p class="dock-ticket">${escape(momentTicketNote())}</p>` : ''}</div>` : ''}<div class="dock-main"><div id="voice-dock" class="mic-slot"></div>${primary}</div>${secondary ? `<div class="dock-secondary">${secondary}</div>` : ''}${hint ? `<p class="dock-hint">${hint}</p>` : ''}</section>`;
   }
   // The audio card moves into the room layout; its node (not its media) survives rerenders.
   const voiceSlot = document.getElementById('voice-panel-slot');

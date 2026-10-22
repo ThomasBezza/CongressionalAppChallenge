@@ -42,7 +42,7 @@ in stuttering. Cold-start and long-lock checks are deferred, not recording gates
 1. Start a café scene as above. The customer keeps their
    intended order private. Cashier chooses what they heard on the order ticket; leaving
    a detail unanswered is allowed. Nothing reaches the customer before sharing.
-2. Cashier selects Share ticket. Customer chooses Review the ticket or Skip review.
+2. Cashier selects Share ticket. Customer chooses Review ticket or Skip review.
    If reviewing, they can select I’d like a change and explain it in the conversation.
 3. Cashier edits and shares the revised ticket. Customer opens the new version, then
    can select That’s what I wanted. This is the customer’s confirmation, not a score.
@@ -51,13 +51,17 @@ in stuttering. Cold-start and long-lock checks are deferred, not recording gates
 
 The cashier now uses paired tap choices; tap a selected choice again to leave it
 unanswered. For the focused phone check, toggle the other device’s microphone while
-the cashier selects details. During a customer time request, sharing should show only
-a quiet ticket-for-later line. Clear the moment, skip review, then revise: the customer
-should still see only an optional underlined way to review after all. Pause/resume
-announcements should name the phase explicitly. This physical-phone follow-up is open.
+the cashier selects details. During a customer time request, sharing should add a
+readable ticket line to the green pinned time-status strip, with no review buttons.
+Clear the moment, skip review, then revise: the customer should see the heading "The
+cashier updated the ticket" and an outlined Review ticket button, nothing else. Pause/resume
+announcements should name the phase explicitly.
 
-Automated checks and developer browser use cover this addition. Actual iPhone use of
-the ticket has not run yet.
+Owner-operated iPhone/Mac checks passed for stable choices during mic toggles, reaching
+Share, matching receipt/confirmation, quiet customer delivery, skip retained on revision,
+and final ticket/microphone cleanup. Owner identified two notice/copy improvements for
+later discussion. Rooms were seen paused during the checks; resumption worked, but the
+pause cause remains unknown. This was one operator/two devices, not independent peer use.
 
 ## Earlier separate-call walkthrough (historical)
 

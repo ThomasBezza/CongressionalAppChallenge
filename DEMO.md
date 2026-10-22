@@ -2,9 +2,10 @@
 
 Stable service: https://rehearsal-demo.onrender.com/
 
-The hosted workflow passed with three developer-controlled browser tabs. The earlier
-physical iPhone/Meet check used the temporary tunnel; a fresh physical-phone run on this
-host remains to do. Old tunnel links expired.
+The hosted workflow passed with three developer-controlled browser tabs. The owner also
+repeated iPhone/Safari entry, readiness, a time request received by the Mac, and room
+ending on this host. The earlier phone-to-Mac Meet coexistence check used the temporary
+tunnel; audio was not repeated during this hosted check. Old tunnel links expired.
 
 ## Before a run
 

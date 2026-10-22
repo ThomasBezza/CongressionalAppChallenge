@@ -6,8 +6,9 @@ Render reports Live from app snapshot 74d69f47a293c4b6c8292c38438ddc9377750bc5.
 Live browser verification passed: two synthetic participants joined, were admitted/readied,
 received a time request through the streams, and received room ending. Health returns200,
 unauthenticated creation403, and ended rooms404. The owner rotated the host key afterward;
-health, public protection and deployed asset hashes were rechecked. No new physical-phone
-or cold-start test has run against this host.
+health, public protection and deployed asset hashes were rechecked. The owner then created
+a room with the replacement key and completed an iPhone/Safari join, readiness, time
+request and room-ending check on this host. Cold-start behavior remains untested.
 
 Use one free Render Node web service. This keeps the existing server and room logic;
 no database or framework migration is needed. The stable address is for a small hosted

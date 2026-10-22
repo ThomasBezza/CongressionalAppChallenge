@@ -33,10 +33,14 @@ tunnel; audio was not repeated during this hosted check. Old tunnel links expire
 
 ## Recovery
 
+- If Session options does not open on a click, tap again or focus it and press Enter.
+  One automation click failed; the issue has not been reproduced reliably.
 - Reconnecting means actions are not confirmed. Wait for live state before sending again.
 - After a detected disconnect, the room pauses and both people must become ready again.
-- If the server restarted or the hour expired, the old room cannot be reopened. Return
-  home, create a fresh room, and replace the participant invitation.
+- If the server restarted or the hour expired, the old room cannot be reopened. The host
+  view tells you to return home and create a new room; participants are told to ask for a
+  fresh invitation. After refreshing a stale tab, the app explains both options because
+  its previous role may no longer be known.
 - If a hosting key is rejected, retrieve the current value from Render Environment and
   re-enter it. Keep the secret out of chat and recording.
 
@@ -53,3 +57,15 @@ not establish reduced stuttering, broad compatibility, or usefulness to unfamili
   different jobs, so participants never need the private creation key.
 - Server memory keeps the first version simple, but a restart loses all rooms. Waking
   the service and creating a fresh invitation make the demonstration repeatable.
+
+## Before recording: open checks
+
+Cold-start timing on the free host, longer screen lock, and Meet audio on this hosted
+address still need checks; no measured wake time is available. Earlier audio worked
+on the temporary tunnel only. A controlled local restart test now verifies the recovery
+messages, but it is not a free-service sleep/wake measurement.
+
+If a willing second person is available, demonstrate a short real food-order exchange
+and the listener waiting after a time request. Otherwise, explain the intended situation
+and label the video a technical demonstration. Do not present a single operator as two
+people or claim that the app improves stuttering.

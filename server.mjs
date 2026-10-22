@@ -150,8 +150,11 @@ export function createApp({ rooms = new Rooms(), sweepMs = 1000, pingMs = 5000, 
 // Only this explicit mode listens on all interfaces, behind Render's HTTPS edge.
 // Never infer authority from caller-controlled forwarded headers.
 export function hostedSettings(env = process.env) {
-  const url = new URL(env.RENDER_EXTERNAL_URL || '');
-  if (env.RENDER !== 'true' || url.protocol !== 'https:' || !/^[a-z0-9-]+\.onrender\.com$/.test(url.hostname) || url.port || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('Hosted mode needs Render and its exact HTTPS RENDER_EXTERNAL_URL.');
+  const originError = 'Hosted mode needs Render and its exact HTTPS RENDER_EXTERNAL_URL.';
+  let url;
+  try { url = new URL(env.RENDER_EXTERNAL_URL); }
+  catch { throw new Error(originError); }
+  if (env.RENDER !== 'true' || url.protocol !== 'https:' || !/^[a-z0-9-]+\.onrender\.com$/.test(url.hostname) || url.port || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error(originError);
   if (!/^[A-Za-z0-9_+/=-]{32,128}$/.test(env.HOST_SETUP_KEY || '')) throw new Error('Set HOST_SETUP_KEY to a random secret of 32–128 base64 characters in Render Environment.');
   const port = Number(env.PORT || 10000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer from 1 to 65535.');

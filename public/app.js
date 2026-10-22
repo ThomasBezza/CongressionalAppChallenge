@@ -126,7 +126,14 @@ async function connectStream() {
       }
     } catch (err) {
       if (stopped || generation !== current) return;
-      if ([403, 404].includes(err.status)) { error(err.message); finishLocal(err.message); return; }
+      if ([403, 404].includes(err.status)) {
+        const message = err.status !== 404 ? err.message : state?.self.role === 'host'
+          ? 'This room is no longer available. Return home and create a new room, then share its fresh participant invitation.'
+          : state?.self.role
+            ? 'This room is no longer available. Ask the host for a fresh participant invitation.'
+            : 'This room is no longer available. If you are hosting, return home and create a new room. Otherwise, ask your host for a fresh invitation.';
+        error(message); finishLocal(message); return;
+      }
       error(err.status === 409 ? err.message : 'Connection lost. Keep this page open to reconnect. No actions are confirmed while offline.');
     } finally { clearInterval(pulse); if (heartbeat === pulse) heartbeat = null; }
     if (stopped || generation !== current) return;

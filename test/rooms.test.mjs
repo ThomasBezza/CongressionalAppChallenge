@@ -4,6 +4,9 @@ import { createApp, previewSettings, hostedSettings } from '../server.mjs';
 import { checkHosted } from '../scripts/check-hosted.mjs';
 import { Rooms } from '../app/rooms.mjs';
 import { request as rawRequest } from 'node:http';
+import { createServer } from 'node:http';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 // These tests use real HTTP connections and receive state on separate SSE streams.
 async function fixture(t, options = {}) {
@@ -310,6 +313,7 @@ test('hosted mode validates Render origin, port and persistent host secret befor
   assert.deepEqual(config.allowedHosts, ['demo-rehearsal.onrender.com']);
   assert.equal(config.creationSecret, env.HOST_SETUP_KEY);
   assert.equal(config.port, 10000);
+  for (const value of [undefined, '', 'not a URL']) assert.throws(() => hostedSettings({ ...env, RENDER_EXTERNAL_URL: value }), /Hosted mode needs Render and its exact HTTPS RENDER_EXTERNAL_URL/);
   for (const change of [{ RENDER: 'false' }, { RENDER_EXTERNAL_URL: 'http://demo-rehearsal.onrender.com' }, { RENDER_EXTERNAL_URL: 'https://demo-rehearsal.onrender.com.evil.test' }, { RENDER_EXTERNAL_URL: 'https://demo-rehearsal.onrender.com/path' }, { HOST_SETUP_KEY: '' }, { HOST_SETUP_KEY: 'a-short-password' }, { PORT: 'NaN' }, { PORT: '65536' }]) assert.throws(() => hostedSettings({ ...env, ...change }));
   assert.equal(previewSettings([]).address, '127.0.0.1', 'default still binds only loopback');
 });
@@ -344,4 +348,24 @@ test('repeatable deployment check exercises protected creation, live synchroniza
   await checkHosted(`http://127.0.0.1:${app.server.address().port}`, key, message => reports.push(message));
   assert.equal(reports.length, 3);
   assert.equal(app.rooms.rooms.size, 0, 'synthetic rooms are removed');
+});
+
+test('deployment check CLI identifies wrong keys and malformed responses without printing secrets', async t => {
+  const suppliedKey = 'B'.repeat(43) + '='; // Synthetic; never a deployed key.
+  const app = createApp({ creationSecret: 'A'.repeat(43) + '=' });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  const malformed = createServer((req, res) => { res.end(`not JSON: ${suppliedKey}`); });
+  await new Promise(resolve => malformed.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { await app.server.shutdown(); await new Promise(resolve => malformed.close(resolve)); });
+  for (const [server, expected] of [[app.server, /Failed while creating a room with the host key\. Received HTTP 403; expected 201/], [malformed, /Failed while checking health\. The server did not return valid JSON/]]) {
+    let failure;
+    try {
+      await promisify(execFile)(process.execPath, ['scripts/check-hosted.mjs', `http://127.0.0.1:${server.address().port}`], { env: { ...process.env, HOST_SETUP_KEY: suppliedKey }, timeout: 15_000 });
+    } catch (error) { failure = error; }
+    assert.equal(failure?.code, 1);
+    assert.match(failure.stderr, expected);
+    assert.ok(!failure.stderr.includes(suppliedKey));
+    assert.ok(!failure.stdout.includes(suppliedKey));
+  }
+  assert.equal(app.rooms.rooms.size, 0);
 });

@@ -2,7 +2,8 @@
 
 Deployed October 22, 2026: https://rehearsal-demo.onrender.com/
 
-Render reports Live from app snapshot 74d69f47a293c4b6c8292c38438ddc9377750bc5.
+The live source commit is shown in Render Deploys; release mappings are recorded in the
+private project handoff. The initial deployed baseline was74d69f4.
 Live browser verification passed: two synthetic participants joined, were admitted/readied,
 received a time request through the streams, and received room ending. Health returns200,
 unauthenticated creation403, and ended rooms404. The owner rotated the host key afterward;
@@ -88,7 +89,8 @@ Use the actual service origin with no room fragment. This creates two clearly na
 synthetic participants, admits/readies them, confirms a time request on the other event
 streams, ends the room and checks removal. Cleanup is attempted after failures too;
 if the service is unreachable a remaining room expires within one hour. The runner
-prints no credentials and refuses redirects. It does not verify phone layout or audio.
+reports a fixed workflow stage and numeric HTTP failures without echoing response bodies,
+URLs or credentials. It warns if cleanup could not be confirmed and refuses redirects. It does not verify phone layout or audio.
 
 Follow [DEMO.md](DEMO.md) for the human-operated phone demonstration.
 
@@ -100,3 +102,7 @@ Follow [DEMO.md](DEMO.md) for the human-operated phone demonstration.
 - [Blueprint specification](https://render.com/docs/blueprint-spec): secrets and deployment settings.
 - [Node version selection](https://render.com/docs/node-version).
 - [Health checks](https://render.com/docs/health-checks): the Host header uses the Render hostname.
+
+Hosting review follow-up: startup diagnostics now explain missing/malformed Render URLs;
+the checker reports safe stage/status details; unavailable rooms give host-specific recovery
+and a neutral fallback for refreshed tabs whose role is no longer known.

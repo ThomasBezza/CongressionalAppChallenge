@@ -92,7 +92,7 @@ export function createApp({ rooms = new Rooms(), sweepMs = 1000, pingMs = 5000, 
           const expected = Buffer.from(creationSecret);
           if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) throw new RoomError(403, 'The host key was not accepted. Enter the private host key to create a room. Participant invitations still work.');
         }
-        await body(req); json(res, 201, rooms.create()); return;
+        const data = await body(req); json(res, 201, rooms.create(data.scenarioId)); return;
       }
       const match = url.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{32})\/(join|state|events|action|heartbeat|audio|audio-signal|audio-config)$/);
       if (!match) throw new RoomError(404, 'Page not found. Open the app home page or your room invitation.');

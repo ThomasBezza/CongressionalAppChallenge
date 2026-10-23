@@ -127,3 +127,19 @@ If a willing second person is available, demonstrate a short real food-order exc
 and the listener waiting after a time request. Otherwise, explain the intended situation
 and label the video a technical demonstration. Do not present a single operator as two
 people or claim that the app improves stuttering.
+
+
+## Booking walkthrough
+
+Choose Booking a bowling lane before creating a new room. Assign Caller and Staff member.
+Maple Lanes is fictional; all listed times/days/party sizes are available for practice.
+Caller privately chooses a day/time/party size. Staff asks missing details and reads back
+what they understood. They may share a reservation slip; the caller can review, clarify,
+confirm or skip. Requesting a moment defers the slip offer until the caller is ready.
+Try again keeps the scene and clears the old slip. End the room when finished.
+
+This adds a second context to the same communication workflow. Local browser and
+integration checks passed; real iPhone booking and new sound have not been checked.
+Use a version with the scene choice on the home page. This is fictional practice,
+not a real reservation or independent evidence of benefit. Reconnecting preserves a
+shared slip; Try again clears it.

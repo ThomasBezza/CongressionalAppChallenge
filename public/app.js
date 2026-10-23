@@ -1,4 +1,4 @@
-import { norms, briefs, ticketFields } from './content.js';
+import { norms, scenarios } from './content.js';
 import { VoiceCall } from './voice.js';
 
 const app = document.getElementById('app');
@@ -15,6 +15,8 @@ let controller = null, heartbeat = null, generation = 0, lastFrame = 0, ending =
 let joinAlias = '';
 let pendingLabel = '';
 let ticketDraft = null, ticketContext = '';
+let selectedScenario = 'cafe';
+const currentScene = () => scenarios[state?.scenarioId] || scenarios.cafe;
 const voicePanel = document.getElementById('voice-panel');
 const voice = new VoiceCall({
   send: (access, name, data) => request(`/api/rooms/${access.roomId}/${name}`, data, undefined, access),
@@ -77,7 +79,7 @@ const dockObserver = new ResizeObserver(entries => {
   if (dock) document.documentElement.style.setProperty('--dock-height', `${dock.getBoundingClientRect().height}px`);
 });
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const roleName = role => ({ customer: 'Customer', cashier: 'Cashier', host: 'Host' }[role] || 'Waiting for admission');
+const roleName = role => currentScene().roles[role] || 'Waiting for admission';
 function error(message = '') { errorBox.textContent = message; errorBox.hidden = !message; }
 // `waiting` marks a button unavailable without disabling it, so keyboard focus survives a rerender.
 function button(id, text, action, { disabled = false, waiting = false, cls = '', pressed, independent = false, ...data } = {}) {
@@ -236,44 +238,51 @@ async function command(data) {
   finally { busy = false; pendingLabel = ''; render(); }
 }
 function ticketStatus(ticket, role) {
-  if (ticket.response === 'confirmed') return role === 'customer' ? 'You confirmed: that’s what you wanted.' : 'The customer confirmed: that’s what they wanted.';
-  if (ticket.response === 'correction') return role === 'customer' ? 'Talk through what you’d like changed.' : 'The customer would like a change. Ask them what to change.';
-  if (ticket.response === 'skipped') return role === 'customer' ? ticket.edition > 1 ? 'The cashier updated the ticket.' : 'You skipped the ticket review.' : 'The customer skipped the ticket review. You can keep talking.';
-  return role === 'customer' ? ticket.revealed ? 'Check what the cashier understood. You can confirm or ask for a change.' : ticket.edition > 1 ? 'The cashier updated the ticket. You can review the changes or skip them.' : 'The cashier shared a ticket. You can review it or skip it.' : ticket.revealed ? 'The customer is reviewing the ticket.' : 'The ticket is shared. Reviewing it is the customer’s choice.';
+  const scene = currentScene(), listener = scene.roles.cashier.toLowerCase(), speaker = scene.roles.customer.toLowerCase(), noun = scene.ticketNoun;
+  if (ticket.response === 'confirmed') return role === 'customer' ? 'You confirmed: that’s what you wanted.' : `The ${speaker} confirmed: that’s what they wanted.`;
+  if (ticket.response === 'correction') return role === 'customer' ? 'Talk through what you’d like changed.' : `The ${speaker} would like a change. Ask them what to change.`;
+  if (ticket.response === 'skipped') return role === 'customer' ? ticket.edition > 1 ? `The ${listener} updated the ${noun}.` : `You skipped the ${noun} review.` : `The ${speaker} skipped the ${noun} review. You can keep talking.`;
+  return role === 'customer' ? ticket.revealed ? `Check what the ${listener} understood. You can confirm or ask for a change.` : ticket.edition > 1 ? `The ${listener} updated the ${noun}. You can review the changes or skip them.` : `The ${listener} shared a ${noun}. You can review it or skip it.` : ticket.revealed ? `The ${speaker} is reviewing the ${noun}.` : `The ${noun} is shared. Reviewing it is the ${speaker}’s choice.`;
 }
-// While the customer takes a moment, ticket news lives in the pinned dock and its details stay hidden.
+// The speaker's time request keeps any incoming review offer in the pinned dock.
 function momentTicketNote() {
-  const ticket = state?.ticket;
+  const ticket = state?.ticket, scene = currentScene(), listener = scene.roles.cashier.toLowerCase(), noun = scene.ticketNoun;
   if (state?.self?.role !== 'customer' || !state.self.moment || !ticket) return '';
-  if (!ticket.revealed) return `${ticket.edition > 1 ? 'The cashier updated the ticket.' : 'Your cashier sent a ticket.'} You can review it after you tap I’m ready to go on.`;
-  return ticket.response === 'confirmed' ? '' : 'The cashier’s ticket will be here after you tap I’m ready to go on.';
+  if (!ticket.revealed) return `${ticket.edition > 1 ? `The ${listener} updated the ${noun}.` : `${scene.listenerAddress} sent a ${noun}.`} You can review it after you tap I’m ready to go on.`;
+  return ticket.response === 'confirmed' ? '' : `The ${listener}’s ${noun} will be here after you tap I’m ready to go on.`;
 }
 function ticketPanel() {
   if (!['active', 'paused'].includes(state.phase)) { ticketDraft = null; ticketContext = ''; return ''; }
+  const scene = currentScene(), ticketFields = scene.ticketFields;
+  const listener = scene.roles.cashier.toLowerCase(), speaker = scene.roles.customer.toLowerCase(), noun = scene.ticketNoun;
   const role = state.self.role, ticket = state.ticket;
   const action = (id, text, name, cls = '') => button(id, text, name, { cls, disabled: !online, waiting: busy, independent: true, version: state.ticketVersion, attempt: state.attempt });
   const status = ticket ? `<p>${escape(ticketStatus(ticket, role))}</p>` : '';
-  if (role === 'host') return ticket ? `<section class="panel"><h2>Order ticket</h2>${status}<p class="small">The ticket details are for the customer and cashier.</p></section>` : '';
+  if (role === 'host') return ticket ? `<section class="panel"><h2>${escape(scene.ticketTitle)}</h2>${status}<p class="small">The details are for the ${escape(speaker)} and ${escape(listener)}.</p></section>` : '';
   if (role === 'cashier') {
-    const context = `${state.roomId}:${state.attempt}:${state.members.map(p => p.id).join(':')}`;
+    const context = `${state.roomId}:${state.scenarioId}:${state.attempt}:${state.members.map(p => p.id).join(':')}`;
     if (context !== ticketContext || !ticketDraft || !ticketDraft.dirty && ticketDraft.version !== state.ticketVersion) {
       ticketContext = context;
       ticketDraft = { version: state.ticketVersion, dirty: false, fields: Object.fromEntries(ticketFields.map(f => [f.name, ticket?.fields?.[f.name] || ''])) };
     }
     const stale = ticketDraft.version !== state.ticketVersion;
-    return `<section class="ticket-sheet" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">Write the order ticket</h2><p id="ticket-choice-help">Choose what you understood. Tap a selected choice again to leave it unanswered.</p>${status}${stale ? `<p class="voice-alert">The shared ticket changed in another view. Load it before editing again.</p>${button('ticket-reload', 'Load the shared ticket', 'ticket-reload')}` : ''}<form id="ticket-form"><div class="ticket-fields">${ticketFields.map(f => `<fieldset aria-describedby="ticket-choice-help"><legend>${escape(f.label)}</legend><div class="ticket-choices">${f.options.map((value, i) => button(`ticket-${f.name}-${i}`, value, 'ticket-choice', { pressed: ticketDraft.fields[f.name] === value, disabled: !online || stale, waiting: busy, independent: true, field: f.name, choice: value })).join('')}</div></fieldset>`).join('')}</div><button id="ticket-share" class="primary" type="submit" ${busy ? 'aria-disabled="true"' : ''} ${!online || stale || !Object.values(ticketDraft.fields).some(Boolean) ? 'disabled' : ''}>${busy ? 'Sharing…' : ticket ? 'Share revised ticket' : 'Share ticket'}</button></form><p class="small">Unshared edits stay in this tab. Sharing offers an optional review; it doesn’t end the conversation. The ticket disappears when you retry or the room closes.</p></section>`;
+    return `<section class="ticket-sheet" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">Write the ${escape(scene.ticketTitle.toLowerCase())}</h2><p id="ticket-choice-help">Choose what you understood. Tap a selected choice again to leave it unanswered.</p>${status}${stale ? `<p class="voice-alert">The shared ${escape(noun)} changed in another view. Load it before editing again.</p>${button('ticket-reload', `Load the shared ${noun}`, 'ticket-reload')}` : ''}<form id="ticket-form"><div class="ticket-fields">${ticketFields.map(f => `<fieldset aria-describedby="ticket-choice-help"><legend>${escape(f.label)}</legend><div class="ticket-choices">${f.options.map((value, i) => button(`ticket-${f.name}-${i}`, value, 'ticket-choice', { pressed: ticketDraft.fields[f.name] === value, disabled: !online || stale, waiting: busy, independent: true, field: f.name, choice: value })).join('')}</div></fieldset>`).join('')}</div><button id="ticket-share" class="primary" type="submit" ${busy ? 'aria-disabled="true"' : ''} ${!online || stale || !Object.values(ticketDraft.fields).some(Boolean) ? 'disabled' : ''}>${busy ? 'Sharing…' : ticket ? `Share revised ${escape(noun)}` : `Share ${escape(noun)}`}</button></form><p class="small">Unshared edits stay in this tab. Sharing offers an optional review; it doesn’t end the conversation. The ${escape(noun)} disappears when you retry or the room closes.</p></section>`;
   }
-  if (!ticket) return '';
-  if (state.self.moment) return '';
+  if (!ticket || state.self.moment) return '';
   if (!ticket.revealed) {
-    // Unopened ticket: the heading carries the news; a skip stays in effect, so review is offered without a prompt.
     const skipped = ticket.response === 'skipped', updated = ticket.edition > 1;
     const offer = skipped ? '' : `<p>${updated ? 'You can review the changes or skip them.' : 'You can review it or skip it.'}</p>`;
-    return `<section class="ticket-offer" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">${updated ? 'The cashier updated the ticket' : skipped ? 'Order ticket' : 'Your cashier has a ticket ready'}</h2>${offer}<div class="buttons">${action('ticket-review', 'Review ticket', 'ticket-review', skipped ? '' : 'primary')}${skipped ? '' : action('ticket-skip', 'Skip review', 'ticket-skip', 'quiet')}</div></section>`;
+    return `<section class="ticket-offer" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">${escape(updated ? `The ${listener} updated the ${noun}` : skipped ? scene.ticketTitle : `${scene.listenerAddress} has a ${noun} ready`)}</h2>${offer}<div class="buttons">${action('ticket-review', `Review ${noun}`, 'ticket-review', skipped ? '' : 'primary')}${skipped ? '' : action('ticket-skip', 'Skip review', 'ticket-skip', 'quiet')}</div></section>`;
   }
-  const details = `<dl class="menu-options">${ticketFields.map(f => `<div><dt>${escape(f.label)}</dt><dd>${escape(ticket.fields[f.name] || 'Not heard yet')}</dd></div>`).join('')}</dl><p class="small">This is what the cashier understood. You can clarify anything, including an unanswered detail.</p>`;
+  const details = `<dl class="menu-options">${ticketFields.map(f => `<div><dt>${escape(f.label)}</dt><dd>${escape(ticket.fields[f.name] || 'Not heard yet')}</dd></div>`).join('')}</dl><p class="small">This is what the ${escape(listener)} understood. You can clarify anything, including an unanswered detail.</p>`;
   const controls = `${ticket.response !== 'confirmed' ? action('ticket-confirm', 'That’s what I wanted', 'ticket-confirm', 'primary') : ''}${ticket.response !== 'correction' ? action('ticket-correction', 'I’d like a change', 'ticket-correction') : ''}${action('ticket-skip', 'Skip review', 'ticket-skip', 'quiet')}`;
-  return `<section class="ticket-sheet" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">The cashier’s ticket</h2>${status}${details}<div class="buttons">${controls}</div><p class="small">Reviewing is optional. Nothing is scored or saved after the room closes.</p></section>`;
+  return `<section class="ticket-sheet" aria-labelledby="ticket-title"><h2 id="ticket-title" tabindex="-1">The ${escape(listener)}’s ${escape(noun)}</h2>${status}${details}<div class="buttons">${controls}</div><p class="small">Reviewing is optional. Nothing is scored or saved after the room closes.</p></section>`;
+}
+function sceneChooser() {
+  return `<fieldset class="scene-chooser"><legend>What would you like to rehearse?</legend>${Object.values(scenarios).map(scene => `<label class="scene-option"><input type="radio" name="scenario" value="${scene.id}" ${selectedScenario === scene.id ? 'checked' : ''} ${busy ? 'disabled' : ''}><span><strong>${escape(scene.title)}</strong><span>${escape(scene.description)}</span></span></label>`).join('')}</fieldset><p class="small">The scene stays the same for everyone in this room, including on retries.</p>`;
+}
+function referenceSheet(scene) {
+  return `<section class="menu-sheet" aria-labelledby="menu-title"><h2 id="menu-title">${escape(scene.referenceTitle)}</h2><dl class="menu-options">${scene.facts.map(f => `<div><dt>${escape(f.label)}</dt><dd>${escape(f.value)}</dd></div>`).join('')}</dl><p class="menu-note">${escape(scene.referenceNote)}</p></section>`;
 }
 function render() {
   voice.sync(state, online, credentials);
@@ -294,16 +303,16 @@ function render() {
   const openDetails = [...app.querySelectorAll('details[open]')].map(d => d.id);
   if (!credentials) {
     app.innerHTML = invitation
-      ? `<section class="intro"><h1>You’re invited to practice ordering at a café</h1><p class="lede">You’ll practice with one partner while a host keeps things running. You can ask for more time, pause, or leave whenever you want.</p></section><section class="panel entry"><form id="join-form"><label for="alias">What name should the others see?</label><input id="alias" name="alias" value="${escape(joinAlias)}" autocomplete="off" maxlength="24" required placeholder="A nickname is fine"><button class="primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Asking…' : 'Ask to join'}</button></form><p class="small">Once your host lets you in, you can join the room’s audio. Your browser will ask to use your microphone, and you’ll start muted. Nothing is recorded.</p></section>`
-      : `<section class="intro"><h1>Practice ordering food with a partner</h1><p class="lede">One of you orders and the other takes the order. Either of you can ask for more time, and the other person waits until you’re ready to go on.</p></section><section class="entry panel"><h2>Joining someone’s room?</h2><p>Open the invitation link your host sent you. From there:</p><ol class="journey"><li><strong>Choose a name</strong><span>A nickname is fine. Your host lets you in and tells you whether you’re ordering or taking the order.</span></li><li><strong>Look over the menu</strong><span>You’ll see it before the conversation starts, and it stays on screen the whole time.</span></li><li><strong>Talk it through</strong><span>Tap Give me a moment whenever you need more time.</span></li></ol><p class="small">You’ll need a host and a partner who has agreed to practice. This preview doesn’t match you with partners.</p></section><section class="hosting"><h2>Hosting a rehearsal?</h2><p>Create a room, invite two people, and choose who orders and who takes the order.</p>${requiresHostKey && !previewHostKey ? '<form id="host-key-form"><label for="host-key">Private host key</label><input id="host-key" name="hostKey" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="32" maxlength="128" required aria-describedby="host-key-help"><p class="small" id="host-key-help">Only the preview owner needs this key. Participants use their invitation instead.</p><button class="primary" type="submit" ' + (!safeTransport || busy ? 'disabled' : '') + '>Create a room</button></form>' : button('create','Create a room','create',{cls:'primary',disabled:!safeTransport})}</section>`;
+      ? `<section class="intro"><h1>You’re invited to rehearse a conversation</h1><p class="lede">You’ll practice with one partner while a host keeps things running. You can ask for more time, pause, or leave whenever you want.</p></section><section class="panel entry"><form id="join-form"><label for="alias">What name should the others see?</label><input id="alias" name="alias" value="${escape(joinAlias)}" autocomplete="off" maxlength="24" required placeholder="A nickname is fine"><button class="primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Asking…' : 'Ask to join'}</button></form><p class="small">Once your host lets you in, you can join the room’s audio. Your browser will ask to use your microphone, and you’ll start muted. Nothing is recorded.</p></section>`
+      : `<section class="intro"><h1>Practice a conversation with a partner</h1><p class="lede">Choose a scene and talk it through with a partner. Either of you can ask for more time, and the other person waits until you’re ready to go on.</p></section><section class="entry panel"><h2>Joining someone’s room?</h2><p>Open the invitation link your host sent you. From there:</p><ol class="journey"><li><strong>Choose a name</strong><span>A nickname is fine. Your host lets you in and assigns your role.</span></li><li><strong>Look over the scene</strong><span>Read your role before you begin. The scene details stay on screen while you talk.</span></li><li><strong>Talk it through</strong><span>Tap Give me a moment whenever you need more time.</span></li></ol><p class="small">You’ll need a host and a partner who has agreed to practice. This preview doesn’t match you with partners.</p></section><section class="hosting"><h2>Hosting a rehearsal?</h2><p>Choose a scene, create a room and invite two people. You’ll assign their roles before starting.</p>${sceneChooser()}${requiresHostKey && !previewHostKey ? '<form id="host-key-form"><label for="host-key">Private host key</label><input id="host-key" name="hostKey" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="32" maxlength="128" required aria-describedby="host-key-help"><p class="small" id="host-key-help">Only the preview owner needs this key. Participants use their invitation instead.</p><button class="primary" type="submit" ' + (!safeTransport || busy ? 'disabled' : '') + '>Create a room</button></form>' : button('create','Create a room','create',{cls:'primary',disabled:!safeTransport})}</section>`;
   } else if (!state) {
     app.innerHTML = '<section class="panel hero"><h1>Opening the room</h1><p>Checking your link and connecting.</p></section>';
   } else if (state.phase === 'ended') {
     app.innerHTML = closedScreen(state.notice);
   } else if (state.phase === 'waiting') {
-    app.innerHTML = `<section class="panel hero"><h1>Waiting for your host</h1><p>You’ve asked to join as ${escape(state.self.alias)}. Your host will let you in and tell you which role you have.</p><p class="small">${state.hostConnected ? 'Your host is connected.' : 'Your host isn’t connected right now.'}</p></section><section class="panel"><h2>How the practice works</h2><p>One person orders and the other takes the order. Once you’re both ready, the host starts the conversation.</p><p>${escape(norms)}</p></section>${button('leave','Cancel request','leave',{cls:'quiet',disabled:!online})}`;
+    app.innerHTML = `<section class="panel hero"><h1>Waiting for your host</h1><p>You’ve asked to join as ${escape(state.self.alias)}. Your host will let you in and tell you which role you have.</p><p class="small">${state.hostConnected ? 'Your host is connected.' : 'Your host isn’t connected right now.'}</p></section><section class="panel"><h2>How the practice works</h2><p>Your host will give you a scene and role when you’re admitted. Once you’re both ready, the host starts the conversation.</p><p>${escape(norms)}</p></section>${button('leave','Cancel request','leave',{cls:'quiet',disabled:!online})}`;
   } else {
-    const isHost = state.self.role === 'host';
+    const isHost = state.self.role === 'host', scene = currentScene();
     const pair = state.members || [], holds = online ? pair.filter(p => p.connected && p.moment) : [];
     const canStart = online && state.hostConnected && pair.length === 2 && pair.every(p => p.connected && p.ready && !p.moment && !p.paused);
     const headline = holds.length ? holds.map(p => p.id === state.self.id ? 'You’re taking a moment' : `${p.alias} is taking a moment`).join('. ') : {prepare:'Get ready to try.',active:'Your conversation.',paused:'Take a pause.'}[state.phase];
@@ -328,13 +337,13 @@ function render() {
     const stillSpeaking = others.some(p => state.audio?.some(a => a.id === p.id && !a.muted));
     const retry = state.phase !== 'prepare' ? button('retry','Ask to try again from the start','retry',{disabled:!online || !state.hostConnected || pair.length !== 2 || pair.some(p => !p.connected)}) : '';
     const pauseReason = online && state.phase === 'paused' && state.notice ? `<p class="pause-reason">${escape(state.notice)}</p>` : '';
-    app.innerHTML = `<section class="room-heading ${holds.length ? 'needs-time' : ''}"><h1>${escape(!online ? 'Reconnecting to the room' : holds.length ? headline : state.phase === 'paused' ? 'The conversation is paused' : isHost ? state.phase === 'active' ? 'The conversation has started' : 'Set up the room' : state.phase === 'active' ? 'Ordering at the café' : `You’re the ${roleName(state.self.role).toLowerCase()}`)}</h1><p>${!online ? 'Your taps won’t reach the others until the connection comes back.' : holds.some(p => p.id === state.self.id) ? 'Take as long as you need. The others have been asked to wait. Tap I’m ready to go on when you want to continue.<span data-self-mic="moment"></span>' : holds.length ? `Please wait and let them finish. They’ll tap to continue when they’re ready.${stillSpeaking ? ' Their microphone is on, so they may still be talking.' : ''}` : state.phase === 'paused' ? `Nobody is being rushed. You’ll both tap I’m ready before the host continues.<span data-self-mic="paused"></span>` : isHost ? state.phase === 'active' ? 'Let them talk without stepping in. You can pause if either of them needs it.' : 'Invite two people, let them in, and start once they’re both ready.' : state.phase === 'active' ? `You’re the ${roleName(state.self.role).toLowerCase()}. The menu is below if you need it.` : state.self.role === 'customer' ? 'Decide what you’d like from the menu below. When the conversation starts, ask for it, answer any questions, and correct anything that comes back wrong.' : 'Greet the customer and ask what they’d like. Ask about anything they leave out, like the size, then read the order back so they can correct it.'}</p>${pauseReason}</section>
+    app.innerHTML = `<section class="room-heading ${holds.length ? 'needs-time' : ''}"><h1>${escape(!online ? 'Reconnecting to the room' : holds.length ? headline : state.phase === 'paused' ? 'The conversation is paused' : isHost ? state.phase === 'active' ? 'The conversation has started' : 'Set up the room' : state.phase === 'active' ? scene.activeTitle : `You’re the ${roleName(state.self.role).toLowerCase()}`)}</h1><p class="scene-context">${escape(scene.title)}</p><p>${!online ? 'Your taps won’t reach the others until the connection comes back.' : holds.some(p => p.id === state.self.id) ? 'Take as long as you need. The others have been asked to wait. Tap I’m ready to go on when you want to continue.<span data-self-mic="moment"></span>' : holds.length ? `Please wait and let them finish. They’ll tap to continue when they’re ready.${stillSpeaking ? ' Their microphone is on, so they may still be talking.' : ''}` : state.phase === 'paused' ? `Nobody is being rushed. You’ll both tap I’m ready before the host continues.<span data-self-mic="paused"></span>` : isHost ? state.phase === 'active' ? 'Let them talk without stepping in. You can pause if either of them needs it.' : 'Invite two people, let them in, and start once they’re both ready.' : state.phase === 'active' ? escape(`You’re the ${roleName(state.self.role).toLowerCase()}. Keep the ${scene.referenceName} nearby as you talk.`) : escape(scene.preparation[state.self.role])}</p>${pauseReason}</section>
       ${isHost ? hostPanel(state) : ''}
       <div id="voice-panel-slot"></div>
-      <section class="menu-sheet" aria-labelledby="menu-title"><h2 id="menu-title">Tea &amp; Coffee</h2><dl class="menu-options"><div><dt>Drink</dt><dd>Iced tea or coffee</dd></div><div><dt>Size</dt><dd>Small or large</dd></div><div><dt>Ice</dt><dd>With or without</dd></div><div><dt>To have it</dt><dd>Here or to go</dd></div></dl><p class="menu-note">This café is made up for practice. Keep your order in your head or on your own paper.</p></section>
+      ${referenceSheet(scene)}
       ${ticketPanel()}
       <section class="people"><h2>${online ? 'Who’s here' : 'Who was here before the connection dropped'}</h2><p class="small">${isHost ? 'You’re the host.' : state.hostConnected ? 'The host is here.' : 'The host has disconnected. Wait for them to come back.'} <span data-audio-for="host"></span></p><ul class="pair">${pair.map(p => `<li><span class="person-initial" aria-hidden="true">${escape([...p.alias][0]?.toLocaleUpperCase())}</span><strong>${escape(p.id === state.self.id ? p.alias + ' (you)' : p.alias)}<span class="role-name">${escape(roleName(p.role))}</span></strong><span class="person-state ${p.moment ? 'moment' : ''}">${!p.connected ? 'Disconnected' : p.moment ? 'Taking a moment' : p.ready ? 'Ready' : state.phase === 'active' ? 'Here' : 'Getting ready'}</span><span class="audio-line" data-audio-for="${escape(p.id)}"></span>${isHost && !p.connected ? button(`remove-${p.id}`,'Release disconnected seat','remove',{member:p.id,disabled:!online || state.phase==='active'}) : ''}</li>`).join('') || '<li>Nobody has been let in yet.</li>'}</ul></section>
-      <details class="room-details" id="guidance"><summary>Your role and how to listen</summary><p>${escape(briefs[state.self.role])}</p><p>${escape(norms)}</p></details>
+      <details class="room-details" id="guidance"><summary>Your role and how to listen</summary><p>${escape(scene.briefs[state.self.role])}</p><p>${escape(norms)}</p></details>
       <details class="room-details" id="session-options"><summary>More options</summary><div data-voice-options></div>${retry}<p class="small">This is attempt ${state.attempt}. The room closes at ${escape(new Date(state.expiresAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}))}.</p>
       <div class="end-row">${isHost ? (ending ? `<p>End this room for everyone? It cannot be reopened.</p><div class="buttons">${button('end-confirm','End room for everyone','end',{cls:'danger',disabled:!online})}${button('cancel-end','Keep room open','cancel-end')}</div>` : button('end-prompt','End room','end-prompt',{cls:'danger',disabled:!online})) : button('leave','Leave room','leave',{cls:'quiet',disabled:!online})}</div></details>
       <section class="control-dock" aria-label="Conversation controls">${!online || holds.length ? `<div class="dock-status ${!online ? 'offline' : 'needs-time'}"><p>${!online ? 'Reconnecting. Your taps won’t reach the others yet.' : escape(holds.map(p => p.id === state.self.id ? 'You’re taking a moment' : `${p.alias} is taking a moment`).join('. '))}</p>${online && momentTicketNote() ? `<p class="dock-ticket">${escape(momentTicketNote())}</p>` : ''}</div>` : ''}<div class="dock-main"><div id="voice-dock" class="mic-slot"></div>${primary}</div>${secondary ? `<div class="dock-secondary">${secondary}</div>` : ''}${hint ? `<p class="dock-hint">${hint}</p>` : ''}</section>`;
@@ -358,12 +367,12 @@ function render() {
 }
 function hostPanel(room) {
   const url = `${publicPreviewOrigin || location.origin}/#join=${room.roomId}.${room.invite}`;
-  return `<section class="panel"><h2>Invite two people</h2><p class="small">Send this link to the two people practicing, by text or however your group usually talks. Keep this tab open; it’s your host view.</p><label class="sr-only" for="invite-link">Invitation link</label><input class="invite" id="invite-link" readonly value="${escape(url)}">${button('copy','Copy invitation link','copy')}<h3>Waiting to join</h3>${room.waiting.length ? room.waiting.map(p => `<div class="waiting-card"><strong>${escape(p.alias)}</strong><p class="small">${p.connected ? 'Waiting for you to let them in.' : 'Disconnected. Wait for them to reconnect.'}</p><div class="buttons">${button(`admit-customer-${p.id}`,'Let in as customer','admit',{member:p.id,role:'customer',disabled:!online || !p.connected || room.members.some(m=>m.role==='customer') || room.phase==='active'})}${button(`admit-cashier-${p.id}`,'Let in as cashier','admit',{member:p.id,role:'cashier',disabled:!online || !p.connected || room.members.some(m=>m.role==='cashier') || room.phase==='active'})}${button(`decline-${p.id}`,'Decline','decline',{member:p.id,disabled:!online})}</div></div>`).join('') : '<p class="small">Nobody has asked to join yet.</p>'}</section>`;
+  return `<section class="panel"><h2>Invite two people</h2><p class="small">Send this link to the two people practicing, by text or however your group usually talks. Keep this tab open; it’s your host view.</p><label class="sr-only" for="invite-link">Invitation link</label><input class="invite" id="invite-link" readonly value="${escape(url)}">${button('copy','Copy invitation link','copy')}<h3>Waiting to join</h3>${room.waiting.length ? room.waiting.map(p => `<div class="waiting-card"><strong>${escape(p.alias)}</strong><p class="small">${p.connected ? 'Waiting for you to let them in.' : 'Disconnected. Wait for them to reconnect.'}</p><div class="buttons">${button(`admit-customer-${p.id}`,`Let in as ${roleName('customer').toLowerCase()}`,'admit',{member:p.id,role:'customer',disabled:!online || !p.connected || room.members.some(m=>m.role==='customer') || room.phase==='active'})}${button(`admit-cashier-${p.id}`,`Let in as ${roleName('cashier').toLowerCase()}`,'admit',{member:p.id,role:'cashier',disabled:!online || !p.connected || room.members.some(m=>m.role==='cashier') || room.phase==='active'})}${button(`decline-${p.id}`,'Decline','decline',{member:p.id,disabled:!online})}</div></div>`).join('') : '<p class="small">Nobody has asked to join yet.</p>'}</section>`;
 }
 async function createRoom() {
   busy = true; error(); render();
   try {
-    const room = await request('/api/rooms', {});
+    const room = await request('/api/rooms', { scenarioId: selectedScenario });
     if (previewHostKey) { try { sessionStorage.setItem('rehearsal-preview-host', previewHostKey); } catch { /* Memory only is sufficient. */ } }
     openRoom(room.roomId, room.token);
   } catch (err) {
@@ -374,6 +383,9 @@ async function createRoom() {
     error(err.message);
   } finally { busy = false; render(); }
 }
+app.addEventListener('change', event => {
+  if (event.target.name === 'scenario' && Object.hasOwn(scenarios, event.target.value)) selectedScenario = event.target.value;
+});
 app.addEventListener('submit', async event => {
   if (event.target.id === 'ticket-form') {
     event.preventDefault(); if (busy || !ticketDraft) return;
@@ -407,7 +419,7 @@ app.addEventListener('click', async event => {
     catch { input.focus(); input.select(); error('Copy the selected participant invitation manually.'); }
   } else if (action === 'ticket-choice') {
     if (!ticketDraft || !online || busy || ticketDraft.version !== state.ticketVersion) return;
-    const field = ticketFields.find(f => f.name === node.dataset.field);
+    const field = currentScene().ticketFields.find(f => f.name === node.dataset.field);
     if (!field?.options.includes(node.dataset.choice)) return;
     ticketDraft.fields[field.name] = ticketDraft.fields[field.name] === node.dataset.choice ? '' : node.dataset.choice;
     ticketDraft.dirty = true; render();

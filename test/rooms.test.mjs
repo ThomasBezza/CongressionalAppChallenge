@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createApp, previewSettings, hostedSettings } from '../server.mjs';
 import { checkHosted } from '../scripts/check-hosted.mjs';
 import { Rooms } from '../app/rooms.mjs';
+import { scenarios } from '../public/content.js';
 import { request as rawRequest } from 'node:http';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
@@ -10,7 +11,8 @@ import { promisify } from 'node:util';
 
 // These tests use real HTTP connections and receive state on separate SSE streams.
 async function fixture(t, options = {}) {
-  const app = createApp(options); const clients = [];
+  const { scenarioId, ...appOptions } = options;
+  const app = createApp(appOptions); const clients = [];
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   t.after(async () => { clients.forEach(c => c.close()); await app.server.shutdown(); });
@@ -18,7 +20,7 @@ async function fixture(t, options = {}) {
     const res = await fetch(base + path, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(data === undefined ? {} : { 'Content-Type': 'application/json' }), ...extra }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
     return { status: res.status, data: await res.json() };
   }
-  const created = await request('/api/rooms', null, {}); assert.equal(created.status, 201);
+  const created = await request('/api/rooms', null, { scenarioId }); assert.equal(created.status, 201);
   const room = created.data;
   const path = endpoint => `/api/rooms/${room.roomId}/${endpoint}`;
   function client(token) {
@@ -605,4 +607,59 @@ test('a host pause is attributed to the host', async t => {
   assert.equal((await f.host.action({ action: 'pause' })).status, 200);
   const paused = await f.cashier.wait(s => s.phase === 'paused');
   assert.equal(paused.notice, 'The host paused the conversation. Both participants choose Ready again before the host resumes.');
+});
+
+
+for (const scenarioId of ['cafe', 'booking']) {
+  test(`${scenarioId}: scene validation, private review and retry stay bound to the room`, async t => {
+    const f = await pair(t, { scenarioId });
+    const fields = Object.fromEntries(scenarios[scenarioId].ticketFields.map(field => [field.name, field.options[0]]));
+    const otherScene = scenarioId === 'cafe' ? 'booking' : 'cafe';
+    const wrongFields = Object.fromEntries(scenarios[otherScene].ticketFields.map(field => [field.name, field.options[0]]));
+    const waiting = await f.join('Waiting'); await waiting.connect();
+    const pending = (await waiting.snapshot()).data;
+    assert.equal(pending.scenarioId, undefined);
+    assert.equal(pending.ticket, undefined);
+    for (const client of [f.host, f.customer, f.cashier]) assert.equal((await client.snapshot()).data.scenarioId, scenarioId);
+    assert.equal((await ticketAction(f.cashier, 'ticket-share', { fields })).status, 409);
+    await start(f);
+    assert.equal((await f.host.action({ action: 'scenario', scenarioId: otherScene })).status, 400);
+    assert.equal((await ticketAction(f.cashier, 'ticket-share', { fields: wrongFields })).status, 400);
+    assert.equal((await ticketAction(f.host, 'ticket-share', { fields })).status, 403);
+    assert.equal((await f.customer.action({ action: 'moment', value: true })).status, 200);
+    assert.equal((await ticketAction(f.cashier, 'ticket-share', { fields })).status, 200);
+    const hidden = (await f.customer.snapshot()).data;
+    assert.equal(hidden.ticket.fields, undefined); assert.equal(hidden.self.moment, true);
+    assert.equal((await f.host.snapshot()).data.ticket.fields, undefined);
+    assert.equal((await waiting.snapshot()).data.ticket, undefined);
+    assert.equal((await ticketAction(f.customer, 'ticket-review')).status, 200);
+    assert.deepEqual((await f.customer.snapshot()).data.ticket.fields, fields);
+    assert.equal((await ticketAction(f.customer, 'ticket-skip')).status, 200);
+    const oldVersion = (await f.customer.snapshot()).data;
+    const revised = { ...fields, [scenarios[scenarioId].ticketFields[0].name]: scenarios[scenarioId].ticketFields[0].options[1] };
+    assert.equal((await ticketAction(f.cashier, 'ticket-share', { fields: revised })).status, 200);
+    const newVersion = (await f.customer.snapshot()).data;
+    assert.equal(newVersion.ticket.response, 'skipped'); assert.equal(newVersion.ticket.fields, undefined);
+    assert.equal((await f.customer.action({ action: 'ticket-confirm', attempt: oldVersion.attempt, version: oldVersion.ticketVersion })).status, 409);
+    assert.equal((await ticketAction(f.customer, 'ticket-review')).status, 200);
+    assert.equal((await ticketAction(f.customer, 'ticket-confirm')).status, 200);
+    assert.equal((await f.customer.action({ action: 'moment', value: false })).status, 200);
+    assert.equal((await f.host.action({ action: 'retry' })).status, 200);
+    const retried = (await f.customer.snapshot()).data;
+    assert.equal(retried.scenarioId, scenarioId); assert.equal(retried.ticket, null);
+    assert.equal((await f.cashier.action({ action: 'ticket-share', attempt: oldVersion.attempt, version: oldVersion.ticketVersion, fields })).status, 409);
+    f.customer.close(); await f.customer.connect();
+    assert.equal((await f.customer.snapshot()).data.scenarioId, scenarioId);
+    assert.equal((await f.host.action({ action: 'end' })).status, 200);
+    assert.equal((await f.customer.snapshot()).status, 404);
+  });
+}
+
+test('room creation rejects unknown scene ids instead of silently choosing a different scene', async t => {
+  const f = await fixture(t);
+  for (const scenarioId of ['other', '__proto__', 'constructor', null, 1, {}]) {
+    assert.equal((await f.request('/api/rooms', null, { scenarioId })).status, 400);
+  }
+  const original = (await f.host.snapshot()).data;
+  assert.equal(original.scenarioId, 'cafe');
 });

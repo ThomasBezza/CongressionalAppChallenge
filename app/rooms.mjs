@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { ticketFields } from '../public/content.js';
+import { scenarios } from '../public/content.js';
 
 const secret = () => randomBytes(24).toString('base64url');
 export class RoomError extends Error {
@@ -16,11 +16,12 @@ export class Rooms extends EventEmitter {
     super(); this.rooms = new Map(); this.now = now;
     this.lifetimeMs = lifetimeMs; this.leaseMs = leaseMs;
   }
-  create() {
+  create(scenarioId = 'cafe') {
+    requireThat(typeof scenarioId === 'string' && Object.hasOwn(scenarios, scenarioId), 400, 'Choose one of the available rehearsal scenes.');
     requireThat(this.rooms.size < 100, 503, 'The server is full. Try again after a room ends.');
     const room = {
       id: secret(), invite: secret(), host: { id: 'host', token: secret(), role: 'host', alias: 'Host', connected: false, lastSeen: this.now() },
-      members: new Map(), phase: 'prepare', attempt: 1, revision: 0, ticket: null, ticketVersion: 0,
+      scenarioId, members: new Map(), phase: 'prepare', attempt: 1, revision: 0, ticket: null, ticketVersion: 0,
       notice: 'Waiting for two participants and the host.', expiresAt: this.now() + this.lifetimeMs
     };
     this.rooms.set(room.id, room);
@@ -127,7 +128,7 @@ export class Rooms extends EventEmitter {
     // Waiting users do not receive the group's aliases, roles, or invitation secret.
     if (actor !== room.host && !actor.role) return { ...base, phase: 'waiting', members: [] };
     return {
-      ...base, phase: room.phase, attempt: room.attempt, notice: room.notice, ticketVersion: room.ticketVersion,
+      ...base, scenarioId: room.scenarioId, phase: room.phase, attempt: room.attempt, notice: room.notice, ticketVersion: room.ticketVersion,
       ticket: room.ticket ? {
         version: room.ticket.version, edition: room.ticket.edition, response: room.ticket.response,
         revealed: room.ticket.revealed,
@@ -144,6 +145,8 @@ export class Rooms extends EventEmitter {
     const actor = this.actor(room, token);
     const isHost = actor === room.host;
     const { action } = data;
+    const scene = scenarios[room.scenarioId], ticketFields = scene.ticketFields;
+    const speaker = scene.roles.customer.toLowerCase(), listener = scene.roles.cashier.toLowerCase();
     if (action === 'end') {
       requireThat(isHost, 403, 'Only the host can end the whole room. You can leave at any time.');
       this.close(room, 'The host ended this room.'); return { ended: true };
@@ -173,7 +176,7 @@ export class Rooms extends EventEmitter {
         this.emit('remove', room, candidate.token, 'The host declined this request. Ask them about another session.');
       } else {
         requireThat(!candidate.role, 409, 'That person already has a role.');
-        requireThat(['customer', 'cashier'].includes(data.role), 400, 'Choose customer or cashier.');
+        requireThat(['customer', 'cashier'].includes(data.role), 400, `Choose ${speaker} or ${listener}.`);
         requireThat(room.phase !== 'active', 409, 'Pause before changing the pair.');
         requireThat(candidate.connected, 409, 'This person is disconnected. Wait for them to reconnect.');
         requireThat(!this.participants(room).some(p => p.role === data.role), 409, 'That role is already occupied.');
@@ -187,33 +190,33 @@ export class Rooms extends EventEmitter {
       requireThat(['prepare', 'paused'].includes(room.phase), 409, 'This attempt is already running.');
       const pair = this.participants(room);
       requireThat(pair.length === 2 && pair.every(p => p.connected && p.ready && !p.moment && !p.paused), 409, 'Both participants must be connected, clear their own time requests, and choose Ready.');
-      room.phase = 'active'; room.notice = 'Take the time you need. The cashier responds to what they hear.';
+      room.phase = 'active'; room.notice = 'Take the time you need. Your partner responds to what you say.';
     } else {
       requireThat(isHost || actor.role, 403, 'Wait for the host to admit you before using rehearsal controls.');
       if (typeof action === 'string' && action.startsWith('ticket-')) {
-        requireThat(!isHost, 403, 'Only the customer and cashier control the ticket.');
-        requireThat(['active', 'paused'].includes(room.phase), 409, 'Start the conversation before using the ticket.');
-        requireThat(data.attempt === room.attempt && data.version === room.ticketVersion, 409, 'The ticket changed. Review the current ticket and try again.');
+        requireThat(!isHost, 403, `Only the ${speaker} and ${listener} control the review.`);
+        requireThat(['active', 'paused'].includes(room.phase), 409, `Start the conversation before using the ${scene.ticketNoun}.`);
+        requireThat(data.attempt === room.attempt && data.version === room.ticketVersion, 409, `The ${scene.ticketNoun} changed. Review the current ${scene.ticketNoun} and try again.`);
         if (action === 'ticket-share') {
-          requireThat(actor.role === 'cashier', 403, 'Only the cashier can write the ticket.');
-          requireThat(data.fields && typeof data.fields === 'object' && !Array.isArray(data.fields), 400, 'Choose what you heard before sharing the ticket.');
-          requireThat(Object.keys(data.fields).length === ticketFields.length && ticketFields.every(f => Object.hasOwn(data.fields, f.name) && (data.fields[f.name] === '' || f.options.includes(data.fields[f.name]))), 400, 'Choose ticket details from the menu, or leave them unanswered.');
-          requireThat(ticketFields.some(f => data.fields[f.name] !== ''), 400, 'Add at least one detail you heard before sharing the ticket.');
+          requireThat(actor.role === 'cashier', 403, `Only the ${listener} can write the ${scene.ticketNoun}.`);
+          requireThat(data.fields && typeof data.fields === 'object' && !Array.isArray(data.fields), 400, `Choose what you heard before sharing the ${scene.ticketNoun}.`);
+          requireThat(Object.keys(data.fields).length === ticketFields.length && ticketFields.every(f => Object.hasOwn(data.fields, f.name) && (data.fields[f.name] === '' || f.options.includes(data.fields[f.name]))), 400, 'Choose details from this scene, or leave them unanswered.');
+          requireThat(ticketFields.some(f => data.fields[f.name] !== ''), 400, `Add at least one detail you heard before sharing the ${scene.ticketNoun}.`);
           room.ticket = {
             version: ++room.ticketVersion, edition: (room.ticket?.edition || 0) + 1,
             fields: Object.fromEntries(ticketFields.map(f => [f.name, data.fields[f.name]])),
             revealed: false, response: room.ticket?.response === 'skipped' ? 'skipped' : 'pending'
           };
         } else {
-          requireThat(actor.role === 'customer', 403, 'Only the customer can choose whether to review or confirm the ticket.');
-          requireThat(room.ticket, 409, 'Wait for the cashier to share a ticket.');
+          requireThat(actor.role === 'customer', 403, `Only the ${speaker} can choose whether to review or confirm.`);
+          requireThat(room.ticket, 409, `Wait for the ${listener} to share a ${scene.ticketNoun}.`);
           if (action === 'ticket-review') {
             room.ticket.revealed = true;
             if (room.ticket.response === 'skipped') room.ticket.response = 'pending';
           } else if (action === 'ticket-skip') {
             room.ticket.revealed = false; room.ticket.response = 'skipped';
           } else if (action === 'ticket-confirm' || action === 'ticket-correction') {
-            requireThat(room.ticket.revealed, 409, 'Open the current ticket before responding to it.');
+            requireThat(room.ticket.revealed, 409, `Open the current ${scene.ticketNoun} before responding to it.`);
             room.ticket.response = action === 'ticket-confirm' ? 'confirmed' : 'correction';
           } else throw new RoomError(400, 'Unknown ticket action.');
         }

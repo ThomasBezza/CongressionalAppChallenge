@@ -99,6 +99,7 @@ input.invite { font-size: .86rem; margin: 10px 0; color: var(--muted); }
 .room-heading { padding: 0 0 18px; }
 .room-heading p { max-width: 32em; }
 .room-heading.needs-time h1 { color: var(--moment); }
+.room-heading .pause-reason { margin: 12px 0 0; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
 
 /* The paper menu is the one object in the room: printed, slightly lifted */
 .menu-sheet { margin: 8px 0 28px; padding: 26px 24px 20px; background: var(--card); border-radius: 4px; box-shadow: 0 1px 2px rgba(31, 27, 22, .08), 0 10px 28px rgba(31, 27, 22, .07); }

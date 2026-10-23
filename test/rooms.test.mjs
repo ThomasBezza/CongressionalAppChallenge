@@ -581,3 +581,28 @@ test('self-hosted fonts are served as woff2, while their source folder stays pri
   }
   assert.equal((await fetch(`${base}/fonts/OFL-Newsreader.txt`)).status, 404);
 });
+
+test('paused rooms tell each role why, including during an active time request', async t => {
+  const f = await pair(t, { disconnectGraceMs: 20 }); await start(f);
+  assert.equal((await f.customer.action({ action: 'moment', value: true })).status, 200);
+  assert.equal((await f.cashier.action({ action: 'pause' })).status, 200);
+  const manual = await f.customer.wait(s => s.phase === 'paused');
+  assert.equal(manual.notice, 'Test Cashier paused the conversation. Both participants choose Ready again before the host resumes.');
+  assert.equal(manual.self.moment, true);
+  assert.equal((await f.host.wait(s => s.phase === 'paused')).notice, manual.notice);
+  f.cashier.close();
+  const dropped = await f.customer.wait(s => s.members.some(p => p.role === 'cashier' && !p.connected));
+  assert.equal(dropped.notice, 'Test Cashier disconnected. Reconnect and check readiness before continuing.');
+  assert.equal(dropped.self.moment, true);
+  f.host.close();
+  const noHost = await f.customer.wait(s => !s.hostConnected);
+  assert.equal(noHost.notice, 'Host disconnected. Reconnect and check readiness before continuing.');
+  assert.equal(noHost.phase, 'paused');
+});
+
+test('a host pause is attributed to the host', async t => {
+  const f = await pair(t); await start(f);
+  assert.equal((await f.host.action({ action: 'pause' })).status, 200);
+  const paused = await f.cashier.wait(s => s.phase === 'paused');
+  assert.equal(paused.notice, 'The host paused the conversation. Both participants choose Ready again before the host resumes.');
+});

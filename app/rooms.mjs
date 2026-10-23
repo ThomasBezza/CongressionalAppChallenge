@@ -230,7 +230,7 @@ export class Rooms extends EventEmitter {
       } else if (action === 'pause') {
         requireThat(['active', 'paused'].includes(room.phase), 409, 'There is no active conversation to pause.');
         if (!isHost) actor.paused = true;
-        this.pauseRoom(room, 'The conversation is paused. Both participants choose Ready again before the host resumes.');
+        this.pauseRoom(room, `${isHost ? 'The host' : actor.alias} paused the conversation. Both participants choose Ready again before the host resumes.`);
       } else if (action === 'retry') {
         requireThat(['active', 'paused'].includes(room.phase), 409, 'Start the conversation before requesting a retry.');
         requireThat(room.host.connected && this.participants(room).length === 2 && this.participants(room).every(p => p.connected), 409, 'Wait until the host and both participants are connected.');

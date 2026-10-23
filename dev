@@ -1,14 +1,10 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")"
-if command -v node >/dev/null 2>&1; then
-  cac_node=$(command -v node)
-elif [ -x "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node" ]; then
-  cac_node="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
-else
+if ! command -v node >/dev/null 2>&1; then
   echo 'Node.js 24 is needed. Install it from https://nodejs.org/ and run ./dev again.' >&2
   exit 1
 fi
-if [ "${1:-}" = '--lan' ] || [ "${1:-}" = '--https-preview' ] || [ "${1:-}" = '--hosted' ]; then exec "$cac_node" server.mjs "$@"; fi
-if [ "$#" -gt 0 ]; then exec "$cac_node" "$@"; fi
-exec "$cac_node" server.mjs
+if [ "${1:-}" = '--lan' ] || [ "${1:-}" = '--https-preview' ] || [ "${1:-}" = '--hosted' ]; then exec node server.mjs "$@"; fi
+if [ "$#" -gt 0 ]; then exec node "$@"; fi
+exec node server.mjs

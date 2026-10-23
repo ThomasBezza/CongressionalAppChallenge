@@ -285,7 +285,7 @@ function sceneChooser() {
   return `<fieldset class="scene-chooser"><legend>What would you like to rehearse?</legend>${Object.values(scenarios).map(scene => `<label class="scene-option"><input type="radio" name="scenario" value="${scene.id}" ${selectedScenario === scene.id ? 'checked' : ''} ${busy ? 'disabled' : ''}><span><strong>${escape(scene.title)}</strong><span>${escape(scene.description)}</span></span></label>`).join('')}</fieldset><p class="small">The scene stays the same for everyone in this room, including on retries.</p>`;
 }
 function referenceSheet(scene) {
-  return `<section class="menu-sheet" aria-labelledby="menu-title"><h2 id="menu-title">${escape(scene.referenceTitle)}</h2><dl class="menu-options">${scene.facts.map(f => `<div><dt>${escape(f.label)}</dt><dd>${escape(f.value)}</dd></div>`).join('')}</dl><p class="menu-note">${escape(scene.referenceNote)}</p></section>`;
+  return `<section class="menu-sheet" aria-labelledby="menu-title"><h2 id="menu-title">${escape(scene.referenceTitle)}</h2><dl class="menu-options">${scene.facts.map(f => `<div><dt>${escape(f.label)}</dt><dd>${escape(f.value)}</dd></div>`).join('')}</dl><p class="menu-note">${escape(scene.referenceNote)}</p>${scene.source ? `<p class="small"><a href="${escape(scene.source.url)}" target="_blank" rel="noopener noreferrer">${escape(scene.source.label)} (opens a new tab)</a></p>` : ''}</section>`;
 }
 function render() {
   voice.sync(state, online, credentials);

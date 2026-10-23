@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     region: ohio
-    branch: codex/hosted-rehearsal-room
+    branch: main
     buildCommand: node --test
     startCommand: node server.mjs --hosted
     healthCheckPath: /healthz

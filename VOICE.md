@@ -27,7 +27,7 @@ works. The automated media tests use fakes and do not prove sound delivery.
 Optional Cloudflare TURN support is implemented. After the owner chooses and creates a
 TURN key, set **TURN_KEY_ID** and **TURN_KEY_API_TOKEN** privately in Render Environment;
 set both or neither, then deploy. Never paste these values into chat, source or a video.
-No new account, billing agreement or relay service has been enabled by Codex. Check the
+No relay service is configured in the current demo. Check the
 provider's current billing/account conditions before enabling it; no paid budget assumed.
 
 Only connected admitted roles can request ICE configuration. Node uses the server-side

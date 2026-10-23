@@ -1,38 +1,56 @@
 # Rehearsal Room
 
-A phone-first, invite-only ordering-food rehearsal with a host, customer and cashier.
-A participant can request time without speaking; the partner and host see the request
-until its owner clears it. No claim of clinical effectiveness or validated user demand.
+Practice an everyday conversation with a willing partner and a host. A participant can
+ask for time without speaking; the partner and host see the request until its owner
+clears it. Built-in voice is optional. Nothing is recorded or transcribed.
 
-## Run
+[Open the app](https://rehearsal-demo.onrender.com/)
 
-Use Node.js24. Run `node server.mjs`, then open http://127.0.0.1:8787/.
-Run `node --test` for integration, call-lifecycle and static-asset checks. No packages
-or build step required.
+## Run locally
 
-## Voice preview
+Install Node.js 24, then run `node server.mjs` and open http://127.0.0.1:8787/.
+Run `node --test` for the integration and audio lifecycle checks. No packages or build
+step are required. `./dev` and `./dev --test` are convenience equivalents.
 
-All three admitted roles can choose Join audio. Microphones start muted. Each person
-controls their own microphone and can leave audio without leaving the rehearsal.
-The app does not record or transcribe. Native WebRTC carries audio; Node relays
-authenticated setup messages. STUN-only connections may fail on some networks.
-Optional short-lived TURN configuration and real-device checks are in [VOICE.md](VOICE.md).
-Automated media tests use fakes and do not prove actual sound delivery.
+## Rehearsal scenes
 
-## Optional order ticket
+- Order a drink at Noble Coffee & Tea, 933 Logan St., Noblesville.
+- Ask about bowling at Pinheads, 13825 Britton Park Rd., Fishers.
 
-The cashier selects what they understood and shares a temporary ticket. The customer
-can review, ask for a change, confirm or skip. There is no score or intended-order form.
-A time request quiets the review controls; skipping persists across revisions. Tickets
-clear on retry, pair changes or room ending.
+Venue names and addresses are real. [Noble’s menu](https://www.toasttab.com/noblecoffee)
+and [Pinheads’ venue page](https://bowlatpinheads.com/fishers/) supplied the reference
+facts, checked October 23, 2026. The app labels simplified menu choices and simulated
+reservation availability. It sends no order, call or booking and has no affiliation
+with either business.
 
-## Hosting and limits
+## How it works
 
-See [HOSTING.md](HOSTING.md), [DEMO.md](DEMO.md) and render.yaml. Hosted mode requires
-a private environment host key; participants use a separate invitation.
-Rooms live in memory and disappear on end, restart or after one hour.
-No recording, transcript, speech score, saved target order, matching or AI partner.
+The host chooses a scene, creates a room and shares an invitation. Participants join
+with aliases; the host admits them and assigns roles. Both choose readiness before the
+host starts. Either participant can request time, pause, retry or leave. The listener
+can share an optional order ticket or reservation slip for confirmation or correction.
+Intent stays private; nothing is scored. The scene stays fixed through retries.
 
-Fonts are self-hosted: Newsreader and Atkinson Hyperlegible Next. Their OFL licenses
-are included in public/fonts/. This repository is an app-only deployment snapshot;
-private planning, research and conversation history are excluded.
+Each admitted person can join audio, starting muted, and controls their own microphone.
+Time requests do not mute anyone. Leaving audio stops capture. Room loss or ending
+also stops capture; rejoining requires an explicit action.
+
+## Structure
+
+- `server.mjs`: HTTP endpoints, event streams, hosted access and static files.
+- `app/rooms.mjs`: temporary room state, permissions and rehearsal rules.
+- `app/voice-config.mjs`: direct connection and optional relay configuration.
+- `public/`: interface, shared scene content, styling, audio client and fonts.
+- `test/`: room, privacy, recovery and audio lifecycle checks.
+- `scripts/check-hosted.mjs`: optional synthetic hosted workflow check.
+
+## Deployment and limits
+
+See [HOSTING.md](HOSTING.md), [VOICE.md](VOICE.md) and [DEMO.md](DEMO.md).
+Hosted room creation requires a private environment key; participants use invitations.
+Rooms live in memory for up to one hour and disappear on end or server restart.
+Free hosting can sleep. Direct audio connections may fail on networks requiring a relay.
+Automated media tests use fakes and do not establish sound delivery on every device.
+
+The app does not find partners or provide treatment. Self-hosted Newsreader and
+Atkinson Hyperlegible Next fonts include their required OFL notices in `public/fonts/`.

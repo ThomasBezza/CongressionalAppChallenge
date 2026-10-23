@@ -589,7 +589,7 @@ test('paused rooms tell each role why, including during an active time request',
   assert.equal((await f.customer.action({ action: 'moment', value: true })).status, 200);
   assert.equal((await f.cashier.action({ action: 'pause' })).status, 200);
   const manual = await f.customer.wait(s => s.phase === 'paused');
-  assert.equal(manual.notice, 'Test Cashier paused the conversation. Both participants choose Ready again before the host resumes.');
+  assert.equal(manual.notice, 'Test Cashier paused the conversation.');
   assert.equal(manual.self.moment, true);
   assert.equal((await f.host.wait(s => s.phase === 'paused')).notice, manual.notice);
   f.cashier.close();
@@ -598,7 +598,7 @@ test('paused rooms tell each role why, including during an active time request',
   assert.equal(dropped.self.moment, true);
   f.host.close();
   const noHost = await f.customer.wait(s => !s.hostConnected);
-  assert.equal(noHost.notice, 'Host disconnected. Reconnect and check readiness before continuing.');
+  assert.equal(noHost.notice, 'Host disconnected. Test Cashier disconnected. Reconnect and check readiness before continuing.');
   assert.equal(noHost.phase, 'paused');
 });
 
@@ -606,8 +606,141 @@ test('a host pause is attributed to the host', async t => {
   const f = await pair(t); await start(f);
   assert.equal((await f.host.action({ action: 'pause' })).status, 200);
   const paused = await f.cashier.wait(s => s.phase === 'paused');
-  assert.equal(paused.notice, 'The host paused the conversation. Both participants choose Ready again before the host resumes.');
+  assert.equal(paused.notice, 'The host paused the conversation.');
 });
+
+
+for (const active of [false, true]) {
+  test(`disconnect wording follows reconnection during ${active ? 'a paused attempt' : 'preparation'}`, async t => {
+    const f = await pair(t, { disconnectGraceMs: 10 });
+    if (active) await start(f);
+    if (active) await f.customer.action({ action: 'moment', value: true });
+    f.customer.close();
+    const dropped = await f.host.wait(s => s.members.some(p => p.role === 'customer' && !p.connected));
+    assert.equal(dropped.phase, active ? 'paused' : 'prepare');
+    assert.equal(dropped.notice, 'Test Customer disconnected. Reconnect and check readiness before continuing.');
+    const recovered = f.client(f.customer.token); await recovered.connect();
+    const returned = await f.host.wait(s => s.members.every(p => p.connected));
+    assert.equal(returned.notice, 'Everyone is connected.');
+    assert.equal(recovered.state.notice, returned.notice);
+    assert.equal(returned.phase, active ? 'paused' : 'prepare');
+    assert.equal(returned.members.every(p => !p.ready), true);
+    assert.equal(recovered.state.self.moment, false);
+    // Repeated check-ins/revisions must not create new announcement text.
+    const before = returned.notice;
+    for (let i = 0; i < 3; i++) {
+      assert.equal((await f.request(f.path('heartbeat'), recovered.token, {})).status, 200);
+      assert.equal((await recovered.snapshot()).data.notice, before);
+    }
+    await start({ ...f, customer: recovered });
+    assert.equal((await recovered.snapshot()).data.notice.includes('disconnected'), false);
+  });
+}
+
+
+test('reconnect instructions account for a time request retained through retry', async t => {
+  const f = await pair(t, { disconnectGraceMs: 10 }); await start(f);
+  await f.customer.action({ action: 'moment', value: true });
+  await f.customer.action({ action: 'retry' });
+  f.cashier.close(); await f.customer.wait(s => s.members.some(p => !p.connected));
+  const recovered = f.client(f.cashier.token); await recovered.connect();
+  const returned = await f.customer.wait(s => s.members.every(p => p.connected));
+  assert.equal(returned.notice, 'Everyone is connected. Clear your own time request when you’re ready to go on, then choose I’m ready.');
+  assert.equal(returned.phase, 'prepare'); assert.equal(returned.self.moment, true);
+  assert.equal((await f.customer.action({ action: 'ready', value: true })).status, 409);
+  await f.customer.action({ action: 'moment', value: false });
+  assert.equal((await f.customer.snapshot()).data.notice, 'Everyone is connected.');
+  await start({ ...f, cashier: recovered });
+});
+
+test('preparation wording accounts for empty seats before and after host recovery', () => {
+  const rooms = new Rooms(); const created = rooms.create(); const room = rooms.get(created.roomId);
+  rooms.connect(room, created.token, true);
+  assert.equal(rooms.view(room, created.token).notice, 'Waiting for two participants.');
+  rooms.connect(room, created.token, false); rooms.connect(room, created.token, true);
+  assert.equal(rooms.view(room, created.token).notice, 'Waiting for two participants.');
+  const token = rooms.join(room, created.invite, 'Ana').token; rooms.connect(room, token, true);
+  rooms.command(room, created.token, { action: 'admit', memberId: rooms.actor(room, token).id, role: 'customer' });
+  for (const viewer of [token, created.token]) assert.equal(rooms.view(room, viewer).notice, 'Waiting for another participant.');
+  rooms.connect(room, created.token, false); rooms.connect(room, created.token, true);
+  for (const viewer of [token, created.token]) assert.equal(rooms.view(room, viewer).notice, 'Waiting for another participant.');
+});
+
+test('one reconnect never hides another disconnected participant', async t => {
+  const f = await pair(t, { disconnectGraceMs: 10 }); await start(f);
+  f.customer.close(); f.cashier.close();
+  const both = await f.host.wait(s => s.members.every(p => !p.connected));
+  assert.equal(both.notice, 'Test Customer disconnected. Test Cashier disconnected. Reconnect and check readiness before continuing.');
+  const recovered = f.client(f.customer.token); await recovered.connect();
+  const one = await f.host.wait(s => s.members.find(p => p.role === 'customer').connected);
+  assert.equal(one.notice, 'Test Cashier disconnected. Reconnect and check readiness before continuing.');
+  assert.equal(recovered.state.notice, one.notice);
+  const cashier = f.client(f.cashier.token); await cashier.connect();
+  await recovered.wait(s => s.members.every(p => p.connected));
+  assert.equal(recovered.state.notice, 'Everyone is connected.');
+});
+
+test('manual pause attribution survives disconnects and is reset by a new attempt', async t => {
+  const f = await pair(t, { disconnectGraceMs: 10 }); await start(f);
+  await f.customer.action({ action: 'moment', value: true });
+  await f.cashier.action({ action: 'pause' });
+  const manual = (await f.host.snapshot()).data.notice;
+  f.cashier.close();
+  await f.customer.wait(s => s.notice.startsWith('Test Cashier disconnected.'));
+  const recovered = f.client(f.cashier.token); await recovered.connect();
+  const returned = await f.customer.wait(s => s.members.every(p => p.connected));
+  assert.equal(returned.notice, manual);
+  assert.equal(returned.self.moment, true);
+  assert.equal(returned.members.every(p => !p.ready), true);
+  assert.equal(returned.members.find(p => p.role === 'cashier').paused, false);
+  await f.customer.action({ action: 'moment', value: false });
+  assert.equal((await f.host.action({ action: 'retry' })).status, 200);
+  assert.equal((await recovered.snapshot()).data.notice.includes('paused the conversation'), false);
+  await start({ ...f, cashier: recovered });
+  recovered.close();
+  await f.host.wait(s => s.members.some(p => !p.connected));
+  const again = f.client(recovered.token); await again.connect();
+  assert.equal(again.state.notice, 'Everyone is connected.');
+});
+
+test('participants see host recovery without losing a host manual pause', async t => {
+  const f = await pair(t, { disconnectGraceMs: 10 }); await start(f);
+  f.host.close();
+  const dropped = await f.customer.wait(s => !s.hostConnected);
+  assert.equal(dropped.notice, 'Host disconnected. Reconnect and check readiness before continuing.');
+  const host = f.client(f.host.token); await host.connect();
+  const returned = await f.customer.wait(s => s.hostConnected);
+  assert.equal(returned.notice, 'Everyone is connected.');
+  await host.action({ action: 'pause' });
+  host.close(); await f.cashier.wait(s => !s.hostConnected);
+  const again = f.client(host.token); await again.connect();
+  const manual = await f.cashier.wait(s => s.hostConnected);
+  assert.equal(manual.notice, 'The host paused the conversation.');
+});
+
+for (const seatChange of ['leave', 'remove']) {
+  test(`${seatChange} keeps the missing-seat explanation after remaining people reconnect`, async t => {
+    const f = await pair(t, { disconnectGraceMs: 10 }); await start(f);
+    if (seatChange === 'leave') await f.customer.action({ action: 'leave' });
+    else {
+      f.customer.close(); await f.host.wait(s => s.members.some(p => !p.connected));
+      await f.host.action({ action: 'remove', memberId: f.customer.state.self.id });
+    }
+    const missing = await f.cashier.wait(s => s.members.length === 1);
+    assert.equal(missing.notice, seatChange === 'leave'
+      ? 'Test Customer left. The host can arrange a new pair or end the room.'
+      : 'A disconnected seat was released. The host can admit a replacement.');
+    f.host.close(); await f.cashier.wait(s => !s.hostConnected);
+    const host = f.client(f.host.token); await host.connect();
+    const returned = await f.cashier.wait(s => s.hostConnected);
+    assert.equal(returned.notice, missing.notice);
+    assert.equal(returned.notice.includes('Everyone is connected'), false);
+    assert.equal((await host.action({ action: 'start' })).status, 409);
+    const replacement = await f.join('Replacement'); await replacement.connect();
+    await host.action({ action: 'admit', memberId: replacement.state.self.id, role: 'customer' });
+    assert.equal((await replacement.snapshot()).data.notice, 'Read your role. Choose I’m ready when you want to begin.');
+  });
+}
 
 
 for (const scenarioId of ['cafe', 'booking']) {

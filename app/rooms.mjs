@@ -22,7 +22,7 @@ export class Rooms extends EventEmitter {
     const room = {
       id: secret(), invite: secret(), host: { id: 'host', token: secret(), role: 'host', alias: 'Host', connected: false, lastSeen: this.now() },
       scenarioId, members: new Map(), phase: 'prepare', attempt: 1, revision: 0, ticket: null, ticketVersion: 0,
-      notice: 'Waiting for two participants and the host.', expiresAt: this.now() + this.lifetimeMs
+      notice: 'Waiting for two participants.', pauseCause: null, expiresAt: this.now() + this.lifetimeMs
     };
     this.rooms.set(room.id, room);
     return { roomId: room.id, token: room.host.token, invite: room.invite };
@@ -45,10 +45,29 @@ export class Rooms extends EventEmitter {
   changed(room) { room.revision += 1; this.emit('change', room); }
   resetReadiness(room) { this.participants(room).forEach(p => { p.ready = false; }); }
   resetTicket(room) { room.ticket = null; room.ticketVersion += 1; }
-  pauseRoom(room, notice) {
+  pauseRoom(room, cause) {
     this.resetReadiness(room);
     if (room.phase === 'active' || room.phase === 'paused') room.phase = 'paused';
-    room.notice = notice;
+    // Presence is temporary. Keep a manual pause or seat change through reconnection.
+    if (cause.kind !== 'connection' || !room.pauseCause) room.pauseCause = cause;
+  }
+  currentNotice(room) {
+    if (room.phase === 'ended') return room.notice;
+    const pair = this.participants(room);
+    const disconnected = [room.host, ...pair].filter(p => !p.connected);
+    if (disconnected.length) {
+      return `${disconnected.map(p => `${p.role === 'host' ? 'Host' : p.alias} disconnected.`).join(' ')} Reconnect and check readiness before continuing.`;
+    }
+    const cause = room.pauseCause;
+    if (cause?.kind === 'manual') return `${cause.by} paused the conversation.`;
+    if (cause?.kind === 'left') return `${cause.by} left. The host can arrange a new pair or end the room.`;
+    if (cause?.kind === 'released') return 'A disconnected seat was released. The host can admit a replacement.';
+    if (pair.length !== 2) return pair.length ? 'Waiting for another participant.' : 'Waiting for two participants.';
+    if (cause?.kind === 'connection') {
+      return 'Everyone is connected.' + (pair.some(p => p.moment)
+        ? ' Clear your own time request when you’re ready to go on, then choose I’m ready.' : '');
+    }
+    return room.notice;
   }
   join(room, invite, alias) {
     requireThat(invite === room.invite, 403, 'This invitation is invalid. Ask the host for the correct link.');
@@ -70,7 +89,7 @@ export class Rooms extends EventEmitter {
     if (!connected) {
       actor.audio = null;
       actor.ready = false; actor.moment = false; actor.paused = false;
-      if (actor.role) this.pauseRoom(room, `${actor.role === 'host' ? 'Host' : actor.alias} disconnected. Reconnect and check readiness before continuing.`);
+      if (actor.role) this.pauseRoom(room, { kind: 'connection' });
     } else if (actor.role && actor.role !== 'host') {
       actor.ready = false;
     }
@@ -128,7 +147,7 @@ export class Rooms extends EventEmitter {
     // Waiting users do not receive the group's aliases, roles, or invitation secret.
     if (actor !== room.host && !actor.role) return { ...base, phase: 'waiting', members: [] };
     return {
-      ...base, scenarioId: room.scenarioId, phase: room.phase, attempt: room.attempt, notice: room.notice, ticketVersion: room.ticketVersion,
+      ...base, scenarioId: room.scenarioId, phase: room.phase, attempt: room.attempt, notice: this.currentNotice(room), ticketVersion: room.ticketVersion,
       ticket: room.ticket ? {
         version: room.ticket.version, edition: room.ticket.edition, response: room.ticket.response,
         revealed: room.ticket.revealed,
@@ -154,7 +173,7 @@ export class Rooms extends EventEmitter {
     if (action === 'leave') {
       requireThat(!isHost, 400, 'Use End room to close a hosted session.');
       room.members.delete(token);
-      if (actor.role) { this.resetTicket(room); this.pauseRoom(room, `${actor.alias} left. The host can arrange a new pair or end the room.`); }
+      if (actor.role) { this.resetTicket(room); this.pauseRoom(room, { kind: 'left', by: actor.alias }); }
       this.emit('remove', room, token, 'You left the room.'); this.changed(room);
       return { left: true };
     }
@@ -168,7 +187,7 @@ export class Rooms extends EventEmitter {
         requireThat(candidate.role && !candidate.connected && room.phase !== 'active', 409, 'Only a disconnected seat in a paused or preparing room can be released.');
         room.members.delete(candidate.token);
         this.resetTicket(room);
-        this.pauseRoom(room, 'A disconnected seat was released. The host can admit a replacement.');
+        this.pauseRoom(room, { kind: 'released' });
         this.emit('remove', room, candidate.token, 'The host released your disconnected seat. Ask for a new invitation.');
       } else if (action === 'decline') {
         requireThat(!candidate.role, 409, 'An admitted participant is not a waiting request.');
@@ -183,14 +202,15 @@ export class Rooms extends EventEmitter {
         candidate.role = data.role;
         this.resetTicket(room);
         this.resetReadiness(room);
-        room.notice = 'Read your role. Both participants choose Ready when they want to begin.';
+        room.pauseCause = null;
+        room.notice = 'Read your role. Choose I’m ready when you want to begin.';
       }
     } else if (action === 'start') {
       requireThat(isHost, 403, 'Only the host can start or resume the room.');
       requireThat(['prepare', 'paused'].includes(room.phase), 409, 'This attempt is already running.');
       const pair = this.participants(room);
       requireThat(pair.length === 2 && pair.every(p => p.connected && p.ready && !p.moment && !p.paused), 409, 'Both participants must be connected, clear their own time requests, and choose Ready.');
-      room.phase = 'active'; room.notice = 'Take the time you need. Your partner responds to what you say.';
+      room.phase = 'active'; room.pauseCause = null; room.notice = 'Take the time you need. Your partner responds to what you say.';
     } else {
       requireThat(isHost || actor.role, 403, 'Wait for the host to admit you before using rehearsal controls.');
       if (typeof action === 'string' && action.startsWith('ticket-')) {
@@ -233,11 +253,11 @@ export class Rooms extends EventEmitter {
       } else if (action === 'pause') {
         requireThat(['active', 'paused'].includes(room.phase), 409, 'There is no active conversation to pause.');
         if (!isHost) actor.paused = true;
-        this.pauseRoom(room, `${isHost ? 'The host' : actor.alias} paused the conversation. Both participants choose Ready again before the host resumes.`);
+        this.pauseRoom(room, { kind: 'manual', by: isHost ? 'The host' : actor.alias });
       } else if (action === 'retry') {
         requireThat(['active', 'paused'].includes(room.phase), 409, 'Start the conversation before requesting a retry.');
         requireThat(room.host.connected && this.participants(room).length === 2 && this.participants(room).every(p => p.connected), 409, 'Wait until the host and both participants are connected.');
-        room.phase = 'prepare'; room.attempt += 1; this.resetReadiness(room);
+        room.phase = 'prepare'; room.pauseCause = null; room.attempt += 1; this.resetReadiness(room);
         this.resetTicket(room);
         // Time requests belong to their owners: retry must not clear another person's.
         room.notice = 'A new attempt was requested. Clear your own time request if needed, then choose Ready.';

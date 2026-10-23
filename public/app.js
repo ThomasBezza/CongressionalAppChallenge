@@ -114,10 +114,13 @@ function summary() {
   if (credentials && !online) return 'Reconnecting. Waiting for confirmed room state.';
   if (!state) return '';
   const holds = state.members?.filter(p => p.connected && p.moment).map(p => p.alias) || [];
-  // The server's notice says why the room paused, such as a disconnect or a Pause tap.
+  // Server wording combines current presence with any remaining manual/seat-change cause.
   const paused = state.phase === 'paused' ? `Conversation paused. ${state.notice || 'Check readiness before resuming.'}` : '';
-  if (holds.length) return `${holds.join(' and ')} ${holds.length === 1 ? 'needs' : 'need'} a moment.${paused ? ` ${paused}` : ''}${momentTicketNote() ? ` ${momentTicketNote()}` : ''}`;
-  const phase = { waiting:'Waiting for the host.', prepare:'Prepare for the conversation.', active:'Conversation is active.', paused, ended:'This room has ended.' }[state.phase] || '';
+  const phase = { waiting:'Waiting for the host.', prepare:`Prepare for the conversation. ${state.notice || ''}`.trim(), active:'Conversation is active.', paused, ended:'This room has ended.' }[state.phase] || '';
+  if (holds.length) {
+    const status = ['prepare', 'paused'].includes(state.phase) ? phase : '';
+    return `${holds.join(' and ')} ${holds.length === 1 ? 'needs' : 'need'} a moment.${status ? ` ${status}` : ''}${momentTicketNote() ? ` ${momentTicketNote()}` : ''}`;
+  }
   return state.ticket ? `${phase} ${ticketStatus(state.ticket, state.self.role)}` : phase;
 }
 function setConnection(value, rerender = true) {
@@ -331,13 +334,13 @@ function render() {
       primary = readyButton('primary'); if (state.phase === 'paused') secondary = momentButton('');
     }
     const hint = isHost ? state.phase === 'active' ? '' : canStart ? 'Both people are ready.' : 'You can start once both people have tapped I’m ready.'
-      : state.self.moment ? state.phase === 'paused' ? 'This clears your time request. It doesn’t restart the paused conversation.' : ''
+      : state.self.moment ? ['prepare', 'paused'].includes(state.phase) ? 'Tap I’m ready to go on before choosing I’m ready.' : ''
       : state.phase === 'active' ? 'Asking for time keeps your turn and leaves your microphone as it is.' : state.phase === 'paused' ? 'The host can continue once you’ve both tapped I’m ready.' : 'The host can start once you’ve both tapped I’m ready.';
     const others = holds.filter(p => p.id !== state.self.id);
     const stillSpeaking = others.some(p => state.audio?.some(a => a.id === p.id && !a.muted));
     const retry = state.phase !== 'prepare' ? button('retry','Ask to try again from the start','retry',{disabled:!online || !state.hostConnected || pair.length !== 2 || pair.some(p => !p.connected)}) : '';
-    const pauseReason = online && state.phase === 'paused' && state.notice ? `<p class="pause-reason">${escape(state.notice)}</p>` : '';
-    app.innerHTML = `<section class="room-heading ${holds.length ? 'needs-time' : ''}"><h1>${escape(!online ? 'Reconnecting to the room' : holds.length ? headline : state.phase === 'paused' ? 'The conversation is paused' : isHost ? state.phase === 'active' ? 'The conversation has started' : 'Set up the room' : state.phase === 'active' ? scene.activeTitle : `You’re the ${roleName(state.self.role).toLowerCase()}`)}</h1><p class="scene-context">${escape(scene.title)}</p><p>${!online ? 'Your taps won’t reach the others until the connection comes back.' : holds.some(p => p.id === state.self.id) ? 'Take as long as you need. The others have been asked to wait. Tap I’m ready to go on when you want to continue.<span data-self-mic="moment"></span>' : holds.length ? `Please wait and let them finish. They’ll tap to continue when they’re ready.${stillSpeaking ? ' Their microphone is on, so they may still be talking.' : ''}` : state.phase === 'paused' ? `Nobody is being rushed. You’ll both tap I’m ready before the host continues.<span data-self-mic="paused"></span>` : isHost ? state.phase === 'active' ? 'Let them talk without stepping in. You can pause if either of them needs it.' : 'Invite two people, let them in, and start once they’re both ready.' : state.phase === 'active' ? escape(`You’re the ${roleName(state.self.role).toLowerCase()}. Keep the ${scene.referenceName} nearby as you talk.`) : escape(scene.preparation[state.self.role])}</p>${pauseReason}</section>
+    const pauseReason = online && ['prepare', 'paused'].includes(state.phase) && state.notice ? `<p class="pause-reason">${escape(state.notice)}</p>` : '';
+    app.innerHTML = `<section class="room-heading ${holds.length ? 'needs-time' : ''}"><h1>${escape(!online ? 'Reconnecting to the room' : holds.length ? headline : state.phase === 'paused' ? 'The conversation is paused' : isHost ? state.phase === 'active' ? 'The conversation has started' : 'Set up the room' : state.phase === 'active' ? scene.activeTitle : `You’re the ${roleName(state.self.role).toLowerCase()}`)}</h1><p class="scene-context">${escape(scene.title)}</p><p>${!online ? 'Your taps won’t reach the others until the connection comes back.' : holds.some(p => p.id === state.self.id) ? 'Take as long as you need. The others have been asked to wait. Tap I’m ready to go on when you want to continue.<span data-self-mic="moment"></span>' : holds.length ? `Please wait and let them finish. They’ll tap to continue when they’re ready.${stillSpeaking ? ' Their microphone is on, so they may still be talking.' : ''}` : state.phase === 'paused' ? `Take your time. The conversation stays paused until the host resumes.<span data-self-mic="paused"></span>` : isHost ? state.phase === 'active' ? 'Let them talk without stepping in. You can pause if either of them needs it.' : 'Invite two people, let them in, and start once they’re both ready.' : state.phase === 'active' ? escape(`You’re the ${roleName(state.self.role).toLowerCase()}. Keep the ${scene.referenceName} nearby as you talk.`) : escape(scene.preparation[state.self.role])}</p>${pauseReason}</section>
       ${isHost ? hostPanel(state) : ''}
       <div id="voice-panel-slot"></div>
       ${referenceSheet(scene)}
